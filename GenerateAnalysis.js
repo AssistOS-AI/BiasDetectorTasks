@@ -1,6 +1,7 @@
 module.exports = {
     runTask: async function () {
         try {
+            this.logInfo("Initializing bias analysis task...");
             const llmModule = await this.loadModule("llm");
             const personalityModule = await this.loadModule("personality");
             const utilModule = await this.loadModule("util");
@@ -78,12 +79,16 @@ module.exports = {
             };
 
             // Get personality description
+            this.logProgress("Fetching personality details...");
             const personalityObj = await personalityModule.getPersonalityByName(this.spaceId, this.parameters.personality);
             if (!personalityObj) {
+                this.logError("Personality not found");
                 throw new Error('Personality not found');
             }
+            this.logSuccess("Personality details fetched successfully");
 
             // Construct the analysis prompt
+            this.logProgress("Constructing analysis prompt...");
             const analysisPrompt = `You are analyzing this text with the following personality and context:
 
 Personality: ${this.parameters.personality}
@@ -113,10 +118,10 @@ IMPORTANT:
 
             while (retries > 0) {
                 try {
-                    this.logProgress("Generating bias analysis...");
+                    this.logProgress(`Generating bias analysis (attempt ${4 - retries}/3)...`);
                     response = await llmModule.generateText(this.spaceId, analysisPrompt, this.parameters.personality);
                     
-                    // Validate JSON structure
+                    this.logProgress("Validating LLM response...");
                     const jsonSchema = `{
                         "biases": ["string"],
                         "scores": [number],
@@ -143,9 +148,10 @@ IMPORTANT:
                 } catch (error) {
                     retries--;
                     if (retries === 0) {
+                        this.logError(`Failed to generate valid analysis: ${error.message}`);
                         throw new Error(`Failed to generate valid analysis after all retries: ${error.message}`);
                     }
-                    this.logWarning(`Retry attempt for bias analysis: ${3 - retries}/3`);
+                    this.logWarning(`Analysis generation failed, retrying (${3 - retries}/3 attempts remaining)`);
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 }
             }
@@ -163,15 +169,17 @@ IMPORTANT:
     },
 
     cancelTask: async function () {
-        // Implement cancellation logic if needed
+        this.logWarning("Task cancelled by user");
     },
 
     serialize: async function () {
-        // Implement serialization if needed
+        return {
+            taskType: 'BiasAnalysis',
+            parameters: this.parameters
+        };
     },
 
     getRelevantInfo: async function () {
-        // Return any relevant task information
         return {
             taskType: 'BiasAnalysis',
             parameters: this.parameters
