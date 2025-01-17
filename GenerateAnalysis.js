@@ -1,6 +1,10 @@
 module.exports = {
     runTask: async function () {
         try {
+            // const documentModule = await this.loadModule("document");
+            // this.logProgress(`Loading template book document: ${this.parameters.documentId}...`);
+            // const templateDocument = await documentModule.getDocument(this.spaceId, this.parameters.documentId);
+            // this.logInfo(`Template Book Document Loaded:${templateDocument.title}`);
             this.logInfo("Initializing bias analysis task...");
             const llmModule = await this.loadModule("llm");
             const personalityModule = await this.loadModule("personality");
@@ -43,10 +47,10 @@ module.exports = {
                             - You will be provided with an error message given by the parser that will help you identify the issue in the JSON string.
                             ${jsonSchema ? `- You will be provided with a JSON schema that the corrected JSON string should adhere to.` : ""}
                             ${correctExample ? `- You will be provided with an example of a correct JSON string that adheres to the schema` : ""}
-                         
+
                          ** Input JSON string that needs to be corrected:**
                          "${jsonString}"
-                         
+
                          ** Error message given by the parser:**
                             "${error}"
                             ${jsonSchema ? `** JSON Schema Template:**\n"${jsonSchema}"\n` : ""}
@@ -58,6 +62,7 @@ module.exports = {
                         `;
 
                         const response = await llmModule.generateText(this.spaceId, prompt, this.parameters.personality);
+                        this.logInfo(`LLM helper using personality: ${this.parameters.personality}`);
                         return response.message;
                     }
                 };
@@ -80,7 +85,12 @@ module.exports = {
 
             // Get personality description
             this.logProgress("Fetching personality details...");
-            const personalityObj = await personalityModule.getPersonalityByName(this.spaceId, this.parameters.personality);
+            this.logInfo(`Parameters received: ${JSON.stringify(this.parameters)}`);
+            this.logInfo(`Attempting to fetch personality with ID: ${this.parameters.personality}`);
+
+            const personalityObj = await personalityModule.getPersonality(this.spaceId, this.parameters.personality);
+            this.logInfo(`Personality object received: ${JSON.stringify(personalityObj)}`);
+
             if (!personalityObj) {
                 this.logError("Personality not found");
                 throw new Error('Personality not found');
@@ -91,7 +101,7 @@ module.exports = {
             this.logProgress("Constructing analysis prompt...");
             const analysisPrompt = `You are analyzing this text with the following personality and context:
 
-Personality: ${this.parameters.personality}
+Personality: ${personalityObj.name}
 Description: ${personalityObj.description}
 
 User's Analysis Focus: ${this.parameters.prompt || 'Analyze the text for any potential biases'}
@@ -119,8 +129,8 @@ IMPORTANT:
             while (retries > 0) {
                 try {
                     this.logProgress(`Generating bias analysis (attempt ${4 - retries}/3)...`);
-                    response = await llmModule.generateText(this.spaceId, analysisPrompt, this.parameters.personality);
-                    
+                    response = await llmModule.generateText(this.spaceId, analysisPrompt, personalityObj.id);
+
                     this.logProgress("Validating LLM response...");
                     const jsonSchema = `{
                         "biases": ["string"],
