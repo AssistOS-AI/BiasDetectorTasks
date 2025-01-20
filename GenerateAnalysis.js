@@ -80,6 +80,17 @@ module.exports = {
                 throw new Error("Unable to ensure valid JSON after all phases.");
             };
 
+            // Add sanitization helper
+            const sanitizeResponse = (text) => {
+                return text
+                    .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII characters
+                    .replace(/[_]/g, ' ') // Replace underscores with spaces
+                    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+                    .replace(/،/g, ',') // Replace Arabic comma with standard comma
+                    .replace(/[^\w\s,.!?()-]/g, '') // Keep only basic punctuation and alphanumeric chars
+                    .trim();
+            };
+
             // Get personality description
             this.logProgress("Fetching personality details...");
             this.logInfo(`Parameters received: ${JSON.stringify(this.parameters)}`);
@@ -118,6 +129,9 @@ IMPORTANT:
 - For each bias, provide a score between -10 and 10
 - Negative scores indicate negative bias, positive scores indicate positive bias
 - Provide a detailed explanation for each bias
+- Use ONLY English language and standard ASCII characters
+- DO NOT use special characters, emojis, or non-English text
+- Use only basic punctuation (periods, commas, spaces, parentheses)
 - Format your response in JSON with this exact structure:
 {
     "biases": ["bias_name_1", "bias_name_2", ...],
@@ -146,6 +160,10 @@ IMPORTANT:
                     response = await getLLMResponseWithTimeout(analysisPrompt);
                     this.logInfo(`Raw LLM response for attempt ${4 - retries}:`, response.message);
 
+                    // Sanitize the response before parsing
+                    const sanitizedResponse = sanitizeResponse(response.message);
+                    this.logInfo(`Sanitized response:`, sanitizedResponse);
+
                     this.logProgress("Validating LLM response...");
                     const jsonSchema = `{
                         "biases": ["string"],
@@ -158,8 +176,13 @@ IMPORTANT:
                         "explanations": ["Shows preference towards male perspectives", "Favors younger viewpoints"]
                     }`;
 
-                    const jsonString = await ensureValidJson(response.message, 3, jsonSchema, correctExample);
+                    const jsonString = await ensureValidJson(sanitizedResponse, 3, jsonSchema, correctExample);
                     result = JSON.parse(jsonString);
+
+                    // Sanitize all text fields in the result
+                    result.biases = result.biases.map(bias => sanitizeResponse(bias));
+                    result.explanations = result.explanations.map(exp => sanitizeResponse(exp));
+
                     this.logInfo(`Parsed result for attempt ${4 - retries}:`, result);
 
                     // Validate result structure
@@ -191,7 +214,7 @@ IMPORTANT:
 
             // Save analysis as a document
             this.logProgress("Saving analysis results...");
-            
+
             const documentObj = {
                 title: `bias_analysis_${new Date().toISOString()}`,
                 type: 'bias_analysis',
@@ -199,25 +222,51 @@ IMPORTANT:
                 abstract: JSON.stringify({
                     ...this.parameters,
                     personality_name: personalityObj.name,
-                    personality_description: personalityObj.description,
                     text: this.parameters.text.substring(0, 50) + "...",
-                    biases: result.biases,
-                    scores: result.scores,
-                    explanations: result.explanations,
                     timestamp: new Date().toISOString()
-                }),
+                }, null, 2),
                 metadata: {
-                    personality: personalityObj.name,
-                    prompt: this.parameters.prompt,
-                    text: this.parameters.text,
-                    biases: result.biases,
-                    scores: result.scores,
-                    explanations: result.explanations,
-                    timestamp: new Date().toISOString()
+                    id: null,  // This will be filled by the system
+                    title: `bias_analysis_${new Date().toISOString()}`
                 }
             };
             
             const documentId = await documentModule.addDocument(this.spaceId, documentObj);
+
+            // Add chapters and paragraphs for each bias
+            this.logProgress("Adding chapters and paragraphs for each bias...");
+            const chapterIds = [];
+
+            for (let i = 0; i < result.biases.length; i++) {
+                // Create chapter for each bias
+                const chapterTitle = `${result.biases[i]} (Score: ${result.scores[i]})`;
+                const chapterData = {
+                    title: chapterTitle,
+                    idea: `Analysis of ${result.biases[i]} bias with score ${result.scores[i]}`
+                };
+
+                const chapterId = await documentModule.addChapter(this.spaceId, documentId, chapterData);
+                chapterIds.push(chapterId);
+                this.logInfo(`Added chapter for bias: ${result.biases[i]}`, {
+                    documentId: documentId,
+                    chapterId: chapterId
+                });
+
+                // Add explanation as paragraph
+                const paragraphObj = {
+                    text: result.explanations[i],
+                    commands: {}
+                };
+
+                const paragraphId = await documentModule.addParagraph(this.spaceId, documentId, chapterId, paragraphObj);
+                this.logInfo(`Added paragraph for bias explanation`, {
+                    documentId: documentId,
+                    chapterId: chapterId,
+                    paragraphId: paragraphId
+                });
+            }
+
+            this.logSuccess("Successfully added all chapters and paragraphs");
             this.logSuccess(`Analysis saved as document with ID: ${documentId}`);
 
             return {
