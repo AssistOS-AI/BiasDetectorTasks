@@ -1,14 +1,11 @@
 module.exports = {
     runTask: async function () {
         try {
-            // const documentModule = await this.loadModule("document");
-            // this.logProgress(`Loading template book document: ${this.parameters.documentId}...`);
-            // const templateDocument = await documentModule.getDocument(this.spaceId, this.parameters.documentId);
-            // this.logInfo(`Template Book Document Loaded:${templateDocument.title}`);
             this.logInfo("Initializing bias analysis task...");
             const llmModule = await this.loadModule("llm");
             const personalityModule = await this.loadModule("personality");
             const utilModule = await this.loadModule("util");
+            const documentModule = await this.loadModule("document");
 
             // Helper functions
             const ensureValidJson = async (jsonString, maxIterations = 1, jsonSchema = null, correctExample = null) => {
@@ -88,12 +85,19 @@ module.exports = {
             this.logInfo(`Parameters received: ${JSON.stringify(this.parameters)}`);
             this.logInfo(`Attempting to fetch personality with ID: ${this.parameters.personality}`);
 
-            const personalityObj = await personalityModule.getPersonality(this.spaceId, this.parameters.personality);
+            const personality = await personalityModule.getPersonality(this.spaceId, this.parameters.personality);
+            if (!personality) {
+                this.logError("Personality not found by ID");
+                throw new Error('Personality not found by ID');
+            }
+
+            this.logInfo(`Found personality name: ${personality.name}`);
+            const personalityObj = await personalityModule.getPersonalityByName(this.spaceId, personality.name);
             this.logInfo(`Personality object received: ${JSON.stringify(personalityObj)}`);
 
             if (!personalityObj) {
-                this.logError("Personality not found");
-                throw new Error('Personality not found');
+                this.logError("Personality not found by name");
+                throw new Error('Personality not found by name');
             }
             this.logSuccess("Personality details fetched successfully");
 
@@ -167,9 +171,29 @@ IMPORTANT:
             }
 
             this.logSuccess("Successfully generated bias analysis");
+
+            // Save analysis as a document
+            this.logProgress("Saving analysis results...");
+            
+            const documentObj = {
+                title: `bias_analysis_${new Date().toISOString()}`,
+                type: 'bias_analysis',
+                content: JSON.stringify(result, null, 2),
+                metadata: {
+                    personality: personalityObj.name,
+                    prompt: this.parameters.prompt,
+                    text: this.parameters.text,
+                    timestamp: new Date().toISOString()
+                }
+            };
+            
+            const documentId = await documentModule.addDocument(this.spaceId, documentObj);
+            this.logSuccess(`Analysis saved as document with ID: ${documentId}`);
+
             return {
                 status: 'completed',
-                result: result
+                result: result,
+                documentId: documentId
             };
 
         } catch (error) {
