@@ -130,10 +130,21 @@ IMPORTANT:
             let response;
             let result;
 
+            const getLLMResponseWithTimeout = async (prompt, timeout = 20000) => {
+                return Promise.race([
+                    llmModule.generateText(this.spaceId, prompt, personalityObj.id),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error('LLM request timed out')), timeout)
+                    )
+                ]);
+            };
+
             while (retries > 0) {
                 try {
                     this.logProgress(`Generating bias analysis (attempt ${4 - retries}/3)...`);
-                    response = await llmModule.generateText(this.spaceId, analysisPrompt, personalityObj.id);
+
+                    response = await getLLMResponseWithTimeout(analysisPrompt);
+                    this.logInfo(`Raw LLM response for attempt ${4 - retries}:`, response.message);
 
                     this.logProgress("Validating LLM response...");
                     const jsonSchema = `{
@@ -149,6 +160,7 @@ IMPORTANT:
 
                     const jsonString = await ensureValidJson(response.message, 3, jsonSchema, correctExample);
                     result = JSON.parse(jsonString);
+                    this.logInfo(`Parsed result for attempt ${4 - retries}:`, result);
 
                     // Validate result structure
                     if (!result.biases || !result.scores || !result.explanations ||
@@ -161,11 +173,16 @@ IMPORTANT:
                     break;
                 } catch (error) {
                     retries--;
+                    const errorMessage = error.message || 'Unknown error';
+                    this.logWarning(`Analysis generation failed: ${errorMessage}`);
+
                     if (retries === 0) {
-                        this.logError(`Failed to generate valid analysis: ${error.message}`);
-                        throw new Error(`Failed to generate valid analysis after all retries: ${error.message}`);
+                        this.logError(`Failed to generate valid analysis after all retries: ${errorMessage}`);
+                        throw error;
                     }
-                    this.logWarning(`Analysis generation failed, retrying (${3 - retries}/3 attempts remaining)`);
+
+                    this.logWarning(`Retrying analysis (${retries}/3 attempts remaining)`);
+                    // Wait 2 seconds before retrying
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 }
             }
@@ -179,10 +196,23 @@ IMPORTANT:
                 title: `bias_analysis_${new Date().toISOString()}`,
                 type: 'bias_analysis',
                 content: JSON.stringify(result, null, 2),
+                abstract: JSON.stringify({
+                    ...this.parameters,
+                    personality_name: personalityObj.name,
+                    personality_description: personalityObj.description,
+                    text: this.parameters.text.substring(0, 50) + "...",
+                    biases: result.biases,
+                    scores: result.scores,
+                    explanations: result.explanations,
+                    timestamp: new Date().toISOString()
+                }),
                 metadata: {
                     personality: personalityObj.name,
                     prompt: this.parameters.prompt,
                     text: this.parameters.text,
+                    biases: result.biases,
+                    scores: result.scores,
+                    explanations: result.explanations,
                     timestamp: new Date().toISOString()
                 }
             };
