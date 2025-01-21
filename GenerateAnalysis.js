@@ -80,24 +80,9 @@ module.exports = {
                 throw new Error("Unable to ensure valid JSON after all phases.");
             };
 
-            // Add sanitization helper
-            const sanitizeResponse = (text) => {
-                return text
-                    .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII characters
-                    .replace(/[_]/g, ' ') // Replace underscores with spaces
-                    .replace(/\s+/g, ' ') // Replace multiple spaces with single space
-                    .replace(/،/g, ',') // Replace Arabic comma with standard comma
-                    .replace(/[^\w\s,.!?()-]/g, '') // Keep only basic punctuation and alphanumeric chars
-                    .trim();
-            };
-
-            // Add detokenize helper
-            const detokenize = text => Object.values(text).join('');
-
             // Get personality description
             this.logProgress("Fetching personality details...");
             this.logInfo(`Parameters received: ${JSON.stringify(this.parameters)}`);
-            this.logInfo(`Attempting to fetch personality with ID: ${this.parameters.personality}`);
 
             const personality = await personalityModule.getPersonality(this.spaceId, this.parameters.personality);
             if (!personality) {
@@ -117,7 +102,7 @@ module.exports = {
 
             // Construct the analysis prompt
             this.logProgress("Constructing analysis prompt...");
-            const analysisPrompt = `You are analyzing this text with the following personality and context:
+            let analysisPrompt = `You are analyzing this text with the following personality and context:
 
 Personality: ${personalityObj.name}
 Description: ${personalityObj.description}
@@ -132,10 +117,13 @@ IMPORTANT - READ CAREFULLY:
 - START YOUR RESPONSE DIRECTLY with the JSON object
 - DO NOT include any text after the JSON object
 - Return exactly ${this.parameters.topBiases} most significant biases
-- For each bias, provide a score between -10 and 10
-- Negative scores indicate negative bias, positive scores indicate positive bias
+- For each bias, provide TWO scores: one for X-axis and one for Y-axis
+- Each score should be between -10 and 10 (inclusive)
+- Try to distribute scores evenly across all four quadrants of the graph
+- If you find multiple positive biases, try to balance them with negative biases
+- Aim for a mix of scores that creates an interesting visual pattern when plotted
 - Provide a detailed explanation for each bias (200-250 characters long)
-- DO NOT include the score in the explanation text
+- DO NOT include the scores in the explanation text
 - Use ONLY English language and standard ASCII characters
 - DO NOT use special characters, emojis, or non-English text
 - Use only basic punctuation (periods, commas, spaces, parentheses)
@@ -148,9 +136,9 @@ IMPORTANT - READ CAREFULLY:
         "third_bias_name"
     ],
     "scores": [
-        -7,
-        5,
-        3
+        {"x": 3, "y": -2},
+        {"x": -4, "y": 3},
+        {"x": 2, "y": 4}
     ],
     "explanations": [
         "First bias explanation that is between 200-250 characters long without including the score.",
@@ -159,7 +147,12 @@ IMPORTANT - READ CAREFULLY:
     ]
 }
 
-REMEMBER: Start your response with { and end with } - no other text allowed.`;
+REMEMBER: 
+- Start your response with { and end with } - no other text allowed
+- Each bias should have both X and Y coordinates for plotting
+- Try to distribute points across different quadrants
+- If you find N positive biases, try to include N negative biases for balance
+- Avoid having all points fall on a single line or in a single quadrant`;
 
             // Get analysis from LLM with retries
             let retries = 3;
@@ -180,11 +173,28 @@ REMEMBER: Start your response with { and end with } - no other text allowed.`;
                     this.logProgress(`Generating bias analysis (attempt ${4 - retries}/3)...`);
 
                     response = await getLLMResponseWithTimeout(analysisPrompt);
-                    const cleanResponse = detokenize(response.message);
-                    this.logInfo(`Raw LLM response for attempt ${4 - retries}:`, cleanResponse);
+                    this.logInfo('Raw response:', response);
 
-                    // Parse the response directly as JSON
-                    result = JSON.parse(cleanResponse);
+                    // First try to ensure we have valid JSON using our helper
+                    const validJsonString = await ensureValidJson(
+                        response.message,
+                        1,  // One iteration
+                        // Provide JSON schema
+                        `{
+                            "biases": ["string"],
+                            "scores": [{"x": number, "y": number}],
+                            "explanations": ["string"]
+                        }`,
+                        // Provide example
+                        `{
+                            "biases": ["confirmation_bias"],
+                            "scores": [{"x": 3, "y": -2}],
+                            "explanations": ["A detailed explanation of the bias"]
+                        }`
+                    );
+
+                    // Parse the validated JSON
+                    result = JSON.parse(validJsonString);
                     this.logInfo(`Parsed result for attempt ${4 - retries}:`, result);
 
                     // Validate result structure and lengths
@@ -192,7 +202,8 @@ REMEMBER: Start your response with { and end with } - no other text allowed.`;
                         result.biases.length !== parseInt(this.parameters.topBiases) ||
                         result.scores.length !== parseInt(this.parameters.topBiases) ||
                         result.explanations.length !== parseInt(this.parameters.topBiases)) {
-                        throw new Error('Invalid response format: array lengths do not match topBiases');
+                        // If structure is invalid, retry with more specific instructions
+                        throw new Error(`Invalid response format: Expected ${this.parameters.topBiases} items in each array`);
                     }
 
                     break;
@@ -205,6 +216,14 @@ REMEMBER: Start your response with { and end with } - no other text allowed.`;
                         this.logError(`Failed to generate valid analysis after all retries: ${errorMessage}`);
                         throw error;
                     }
+
+                    // On retry, append error information to the prompt
+                    analysisPrompt += `\n\nPrevious attempt failed with error: ${errorMessage}
+                    Please ensure your response:
+                    1. Is valid JSON
+                    2. Contains exactly ${this.parameters.topBiases} items in each array
+                    3. Follows the exact structure shown above
+                    4. Has properly formatted scores with x and y coordinates`;
 
                     this.logWarning(`Retrying analysis (${retries}/3 attempts remaining)`);
                     // Wait 2 seconds before retrying
@@ -223,9 +242,7 @@ REMEMBER: Start your response with { and end with } - no other text allowed.`;
                 content: JSON.stringify(result, null, 2),
                 abstract: JSON.stringify({
                     personality: personalityObj.name,
-                    prompt: this.parameters.prompt,
                     topBiases: this.parameters.topBiases,
-                    text: this.parameters.text.substring(0, 100) + "...",
                     timestamp: new Date().toISOString()
                 }, null, 2),
                 metadata: {
@@ -237,15 +254,32 @@ REMEMBER: Start your response with { and end with } - no other text allowed.`;
             const documentId = await documentModule.addDocument(this.spaceId, documentObj);
 
             // Add chapters and paragraphs for each bias
-            this.logProgress("Adding chapters and paragraphs for each bias...");
+            this.logProgress("Adding chapters and paragraphs...");
             const chapterIds = [];
 
+            // First, add the original text as the first chapter
+            const textChapterData = {
+                title: "Original Text",
+                idea: "The text that was analyzed for biases"
+            };
+            const textChapterId = await documentModule.addChapter(this.spaceId, documentId, textChapterData);
+            chapterIds.push(textChapterId);
+
+            // Add the full text as a paragraph
+            const textParagraphObj = {
+                text: this.parameters.text,
+                commands: {}
+            };
+            await documentModule.addParagraph(this.spaceId, documentId, textChapterId, textParagraphObj);
+            this.logInfo("Added original text chapter");
+
+            // Then add chapters for each bias
             for (let i = 0; i < result.biases.length; i++) {
                 // Create chapter for each bias
-                const chapterTitle = `${result.biases[i]} (Score: ${result.scores[i]})`;
+                const chapterTitle = `${result.biases[i]} (Score: ${JSON.stringify(result.scores[i])})`;
                 const chapterData = {
                     title: chapterTitle,
-                    idea: `Analysis of ${result.biases[i]} bias with score ${result.scores[i]}`
+                    idea: `Analysis of ${result.biases[i]} bias with score ${JSON.stringify(result.scores[i])}`
                 };
 
                 const chapterId = await documentModule.addChapter(this.spaceId, documentId, chapterData);
