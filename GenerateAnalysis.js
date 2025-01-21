@@ -91,6 +91,9 @@ module.exports = {
                     .trim();
             };
 
+            // Add detokenize helper
+            const detokenize = text => Object.values(text).join('');
+
             // Get personality description
             this.logProgress("Fetching personality details...");
             this.logInfo(`Parameters received: ${JSON.stringify(this.parameters)}`);
@@ -124,20 +127,39 @@ User's Analysis Focus: ${this.parameters.prompt || 'Analyze the text for any pot
 Text to analyze:
 ${this.parameters.text}
 
-IMPORTANT:
+IMPORTANT - READ CAREFULLY:
+- DO NOT include any introductory text or commentary
+- START YOUR RESPONSE DIRECTLY with the JSON object
+- DO NOT include any text after the JSON object
 - Return exactly ${this.parameters.topBiases} most significant biases
 - For each bias, provide a score between -10 and 10
 - Negative scores indicate negative bias, positive scores indicate positive bias
-- Provide a detailed explanation for each bias
+- Provide a detailed explanation for each bias (200-250 characters long)
+- DO NOT include the score in the explanation text
 - Use ONLY English language and standard ASCII characters
 - DO NOT use special characters, emojis, or non-English text
 - Use only basic punctuation (periods, commas, spaces, parentheses)
-- Format your response in JSON with this exact structure:
+- Your response MUST be a valid JSON object with this EXACT structure:
+
 {
-    "biases": ["bias_name_1", "bias_name_2", ...],
-    "scores": [score1, score2, ...],
-    "explanations": ["explanation1", "explanation2", ...]
-}`;
+    "biases": [
+        "first_bias_name",
+        "second_bias_name",
+        "third_bias_name"
+    ],
+    "scores": [
+        -7,
+        5,
+        3
+    ],
+    "explanations": [
+        "First bias explanation that is between 200-250 characters long without including the score.",
+        "Second bias explanation that is between 200-250 characters long without including the score.",
+        "Third bias explanation that is between 200-250 characters long without including the score."
+    ]
+}
+
+REMEMBER: Start your response with { and end with } - no other text allowed.`;
 
             // Get analysis from LLM with retries
             let retries = 3;
@@ -158,39 +180,19 @@ IMPORTANT:
                     this.logProgress(`Generating bias analysis (attempt ${4 - retries}/3)...`);
 
                     response = await getLLMResponseWithTimeout(analysisPrompt);
-                    this.logInfo(`Raw LLM response for attempt ${4 - retries}:`, response.message);
+                    const cleanResponse = detokenize(response.message);
+                    this.logInfo(`Raw LLM response for attempt ${4 - retries}:`, cleanResponse);
 
-                    // Sanitize the response before parsing
-                    const sanitizedResponse = sanitizeResponse(response.message);
-                    this.logInfo(`Sanitized response:`, sanitizedResponse);
-
-                    this.logProgress("Validating LLM response...");
-                    const jsonSchema = `{
-                        "biases": ["string"],
-                        "scores": [number],
-                        "explanations": ["string"]
-                    }`;
-                    const correctExample = `{
-                        "biases": ["gender_bias", "age_bias"],
-                        "scores": [-5, 3],
-                        "explanations": ["Shows preference towards male perspectives", "Favors younger viewpoints"]
-                    }`;
-
-                    const jsonString = await ensureValidJson(sanitizedResponse, 3, jsonSchema, correctExample);
-                    result = JSON.parse(jsonString);
-
-                    // Sanitize all text fields in the result
-                    result.biases = result.biases.map(bias => sanitizeResponse(bias));
-                    result.explanations = result.explanations.map(exp => sanitizeResponse(exp));
-
+                    // Parse the response directly as JSON
+                    result = JSON.parse(cleanResponse);
                     this.logInfo(`Parsed result for attempt ${4 - retries}:`, result);
 
-                    // Validate result structure
+                    // Validate result structure and lengths
                     if (!result.biases || !result.scores || !result.explanations ||
                         result.biases.length !== parseInt(this.parameters.topBiases) ||
                         result.scores.length !== parseInt(this.parameters.topBiases) ||
                         result.explanations.length !== parseInt(this.parameters.topBiases)) {
-                        throw new Error('Invalid response format from LLM');
+                        throw new Error('Invalid response format: array lengths do not match topBiases');
                     }
 
                     break;
@@ -220,9 +222,10 @@ IMPORTANT:
                 type: 'bias_analysis',
                 content: JSON.stringify(result, null, 2),
                 abstract: JSON.stringify({
-                    ...this.parameters,
-                    personality_name: personalityObj.name,
-                    text: this.parameters.text.substring(0, 50) + "...",
+                    personality: personalityObj.name,
+                    prompt: this.parameters.prompt,
+                    topBiases: this.parameters.topBiases,
+                    text: this.parameters.text.substring(0, 100) + "...",
                     timestamp: new Date().toISOString()
                 }, null, 2),
                 metadata: {
