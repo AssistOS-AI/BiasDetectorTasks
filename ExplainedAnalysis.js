@@ -60,7 +60,20 @@ module.exports = {
 
             // Generate detailed explanations for each bias
             this.logProgress("Generating detailed explanations...");
-            const explanationPrompt = `
+            let retries = 3;
+            let response;
+            let explanations;
+
+            const getLLMResponseWithTimeout = async (prompt, timeout = 20000) => {
+                return Promise.race([
+                    llmModule.generateText(this.spaceId, prompt, personalityObj.id),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error('LLM request timed out')), timeout)
+                    )
+                ]);
+            };
+
+            let explanationPrompt = `
             As ${personalityObj.name}, analyze the following text and explain the bias scores in detail:
 
             Original Text:
@@ -75,7 +88,14 @@ module.exports = {
             Bias Pairs to analyze:
             ${JSON.stringify(biasPairs, null, 2)}
 
-            Format your response as a JSON object with this structure:
+            CRITICAL JSON FORMATTING REQUIREMENTS:
+            1. Your response MUST start with an opening curly brace {
+            2. Your response MUST end with a closing curly brace }
+            3. Use double quotes for all strings
+            4. Do not include any text, comments, or explanations outside the JSON structure
+            5. Ensure all JSON keys and values are properly quoted and formatted
+            6. Follow this exact structure:
+
             {
                 "detailed_explanations": [
                     {
@@ -89,8 +109,82 @@ module.exports = {
                 ]
             }`;
 
-            const response = await llmModule.generateText(this.spaceId, explanationPrompt, personalityObj);
-            const explanations = JSON.parse(response.message);
+            while (retries > 0) {
+                try {
+                    this.logProgress(`Generating bias explanation (attempt ${4 - retries}/3)...`);
+                    this.logInfo('Sending prompt to LLM:', explanationPrompt);
+                    
+                    response = await getLLMResponseWithTimeout(explanationPrompt);
+                    this.logInfo('Raw LLM response:', response);
+                    this.logInfo('LLM response message:', response.message);
+
+                    try {
+                        explanations = JSON.parse(response.message);
+                        this.logInfo('Successfully parsed explanations:', explanations);
+
+                        // Validate the structure
+                        if (!explanations.detailed_explanations || !Array.isArray(explanations.detailed_explanations)) {
+                            throw new Error('Invalid response format: detailed_explanations array is missing or not an array');
+                        }
+
+                        if (explanations.detailed_explanations.length !== biasPairs.length) {
+                            throw new Error(`Invalid response format: Expected ${biasPairs.length} explanations, got ${explanations.detailed_explanations.length}`);
+                        }
+
+                        // Validate each explanation
+                        explanations.detailed_explanations.forEach((exp, idx) => {
+                            if (!exp.bias_type || !exp.score_explanation || !exp.supporting_quotes || 
+                                !exp.positive_analysis || !exp.negative_analysis || !exp.impact_analysis) {
+                                throw new Error(`Missing required fields in explanation ${idx + 1}`);
+                            }
+                            if (!Array.isArray(exp.supporting_quotes)) {
+                                throw new Error(`supporting_quotes must be an array in explanation ${idx + 1}`);
+                            }
+                        });
+
+                        break; // If we get here, the response is valid
+                    } catch (parseError) {
+                        this.logError('Failed to parse or validate LLM response:', parseError);
+                        this.logError('Response that failed:', response.message);
+                        throw parseError;
+                    }
+                } catch (error) {
+                    retries--;
+                    const errorMessage = error.message || 'Unknown error';
+                    this.logWarning(`Explanation generation failed: ${errorMessage}`);
+
+                    if (retries === 0) {
+                        this.logError(`Failed to generate valid explanation after all retries: ${errorMessage}`);
+                        throw error;
+                    }
+
+                    // Modify the prompt based on the error
+                    if (error.message.includes('JSON')) {
+                        explanationPrompt += `\n\nPrevious attempt failed with JSON parsing error: ${errorMessage}
+                        Please ensure your response:
+                        1. Is valid JSON that starts with { and ends with }
+                        2. Uses double quotes for all strings
+                        3. Has no trailing commas
+                        4. Has no comments within the JSON
+                        5. Has properly escaped quotes within strings
+                        6. Contains no special characters or line breaks in strings`;
+                    } else if (error.message.includes('array')) {
+                        explanationPrompt += `\n\nPrevious attempt failed with array validation error: ${errorMessage}
+                        Please ensure:
+                        1. The detailed_explanations field is an array
+                        2. The array contains exactly ${biasPairs.length} explanations
+                        3. Each explanation has all required fields
+                        4. The supporting_quotes field is an array`;
+                    } else {
+                        explanationPrompt += `\n\nPrevious attempt failed with error: ${errorMessage}
+                        Please ensure your response follows the exact structure shown above and includes all required fields.`;
+                    }
+
+                    this.logWarning(`Retrying explanation generation (${retries}/3 attempts remaining)`);
+                    // Wait 2 seconds before retrying
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
 
             // Create visualization chapter
             const chapters = [];
@@ -303,5 +397,23 @@ module.exports = {
             this.logError(`Error in bias explanation: ${error.message}`);
             throw error;
         }
+    },
+
+    cancelTask: async function () {
+        this.logWarning("Task cancelled by user");
+    },
+
+    serialize: async function () {
+        return {
+            taskType: 'ExplainedAnalysis',
+            parameters: this.parameters
+        };
+    },
+
+    getRelevantInfo: async function () {
+        return {
+            taskType: 'ExplainedAnalysis',
+            parameters: this.parameters
+        };
     }
 }; 
