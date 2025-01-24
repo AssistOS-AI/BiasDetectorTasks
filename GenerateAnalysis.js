@@ -1,6 +1,10 @@
 module.exports = {
     runTask: async function () {
         try {
+            // Configuration constants
+            const MIN_LENGTH = 200;
+            const MAX_LENGTH = 250;
+
             this.logInfo("Initializing bias analysis task...");
             const llmModule = await this.loadModule("llm");
             const personalityModule = await this.loadModule("personality");
@@ -112,14 +116,11 @@ Text to analyze:
 ${this.parameters.text}
 
 For each bias you identify:
-1. Provide a pair of biases - one positive and one negative manifestation of the same bias type
-2. For each pair:
-   - Give the positive bias a score between (0,10) for both x and y coordinates
-   - Give the negative bias the exact opposite coordinates (negative of the positive scores)
-   - Example: If positive bias is {x: 7.5, y: 5.2}, its negative pair should be {x: -7.5, y: -5.2}
-3. Distribute the bias pairs across different angles to create a fan-like pattern
-4. Provide exactly ${this.parameters.topBiases} pairs of biases (${this.parameters.topBiases * 2} total points)
-5. For each bias, explain how it manifests in the text
+1. Provide a general name for the bias type
+2. Give a general, abstract explanation of how this type of bias typically manifests in writing
+   - The explanation MUST be between ${MIN_LENGTH}-${MAX_LENGTH} characters long
+   - Do not include specific references to the analyzed text
+3. Provide ${this.parameters.topBiases} different biases
 
 CRITICAL JSON FORMATTING REQUIREMENTS:
 1. Your response MUST start with an opening curly brace {
@@ -127,28 +128,17 @@ CRITICAL JSON FORMATTING REQUIREMENTS:
 3. Use double quotes for all strings
 4. Do not include any text, comments, or explanations outside the JSON structure
 5. Ensure all JSON keys and values are properly quoted and formatted
-6. Numbers should not be quoted
+6. Each explanation must be between ${MIN_LENGTH}-${MAX_LENGTH} characters
 7. Follow this exact structure:
 
 {
-    "bias_pairs": [
+    "biases": [
         {
             "bias_type": "name of the bias type",
-            "positive": {
-                "name": "name of positive manifestation",
-                "score": {"x": number, "y": number},
-                "explanation": "how this manifests positively"
-            },
-            "negative": {
-                "name": "name of negative manifestation",
-                "score": {"x": number, "y": number},
-                "explanation": "how this manifests negatively"
-            }
+            "explanation": "general explanation of how this bias typically manifests in writing, without specific references to the analyzed text (${MIN_LENGTH}-${MAX_LENGTH} chars)"
         }
     ]
-}
-
-Ensure each pair of scores are exact opposites and distributed at different angles.`;
+}`;
 
             // Get analysis from LLM with retries
             let retries = 3;
@@ -178,46 +168,19 @@ Ensure each pair of scores are exact opposites and distributed at different angl
                         // Provide detailed JSON schema
                         `{
                             "type": "object",
-                            "required": ["bias_pairs"],
+                            "required": ["biases"],
                             "properties": {
-                                "bias_pairs": {
+                                "biases": {
                                     "type": "array",
                                     "items": {
                                         "type": "object",
-                                        "required": ["bias_type", "positive", "negative"],
+                                        "required": ["bias_type", "explanation"],
                                         "properties": {
                                             "bias_type": {"type": "string"},
-                                            "positive": {
-                                                "type": "object",
-                                                "required": ["name", "score", "explanation"],
-                                                "properties": {
-                                                    "name": {"type": "string"},
-                                                    "score": {
-                                                        "type": "object",
-                                                        "required": ["x", "y"],
-                                                        "properties": {
-                                                            "x": {"type": "number"},
-                                                            "y": {"type": "number"}
-                                                        }
-                                                    },
-                                                    "explanation": {"type": "string"}
-                                                }
-                                            },
-                                            "negative": {
-                                                "type": "object",
-                                                "required": ["name", "score", "explanation"],
-                                                "properties": {
-                                                    "name": {"type": "string"},
-                                                    "score": {
-                                                        "type": "object",
-                                                        "required": ["x", "y"],
-                                                        "properties": {
-                                                            "x": {"type": "number"},
-                                                            "y": {"type": "number"}
-                                                        }
-                                                    },
-                                                    "explanation": {"type": "string"}
-                                                }
+                                            "explanation": {
+                                                "type": "string",
+                                                "minLength": ${MIN_LENGTH},
+                                                "maxLength": ${MAX_LENGTH}
                                             }
                                         }
                                     }
@@ -226,19 +189,10 @@ Ensure each pair of scores are exact opposites and distributed at different angl
                         }`,
                         // Provide a complete example with proper string formatting
                         `{
-                            "bias_pairs": [
+                            "biases": [
                                 {
                                     "bias_type": "confirmation_bias",
-                                    "positive": {
-                                        "name": "selective_perception",
-                                        "score": {"x": 3, "y": 2},
-                                        "explanation": "The text shows a tendency to focus on information that confirms existing beliefs."
-                                    },
-                                    "negative": {
-                                        "name": "disconfirmation_bias",
-                                        "score": {"x": -3, "y": -2},
-                                        "explanation": "The text demonstrates resistance to information that challenges existing beliefs."
-                                    }
+                                    "explanation": "A cognitive tendency where individuals actively seek, interpret, and remember information that confirms their existing beliefs while dismissing contradictory evidence. This pattern often leads to reinforced preconceptions and resistance to alternative viewpoints."
                                 }
                             ]
                         }`
@@ -249,15 +203,23 @@ Ensure each pair of scores are exact opposites and distributed at different angl
                     this.logInfo(`Parsed result for attempt ${4 - retries}:`, result);
 
                     // Validate result structure and lengths
-                    if (!result.bias_pairs || !result.bias_pairs.length) {
-                        throw new Error('Invalid response format: bias_pairs array is empty or missing');
+                    if (!result.biases || !result.biases.length) {
+                        throw new Error('Invalid response format: biases array is empty or missing');
                     }
 
-                    // Check if we have exactly the number of pairs specified in topBiases
-                    const expectedPairs = parseInt(this.parameters.topBiases);
-                    if (result.bias_pairs.length !== expectedPairs) {
-                        throw new Error(`Invalid response format: Expected exactly ${expectedPairs} bias pairs, got ${result.bias_pairs.length}`);
+                    // Check if we have at most the number of biases specified
+                    const expectedBiases = parseInt(this.parameters.topBiases);
+                    if (result.biases.length > expectedBiases) {
+                        throw new Error(`Invalid response format: Got ${result.biases.length} biases, maximum allowed is ${expectedBiases}`);
                     }
+
+                    // Log explanation lengths but don't enforce them
+                    result.biases.forEach((bias, index) => {
+                        const length = bias.explanation.length;
+                        if (length < MIN_LENGTH || length > MAX_LENGTH) {
+                            this.logWarning(`Note: Explanation for bias ${index + 1} has ${length} characters (suggested range was ${MIN_LENGTH}-${MAX_LENGTH} characters)`);
+                        }
+                    });
 
                     break;
                 } catch (error) {
@@ -274,13 +236,11 @@ Ensure each pair of scores are exact opposites and distributed at different angl
                     analysisPrompt += `\n\nPrevious attempt failed with error: ${errorMessage}
                     Please ensure your response:
                     1. Is valid JSON that starts with { and ends with }
-                    2. Contains exactly ${this.parameters.topBiases} items in bias_pairs
+                    2. Contains exactly ${this.parameters.topBiases} items in biases array
                     3. Uses double quotes for all strings
                     4. Does not include any text outside the JSON structure
-                    5. Has properly formatted scores with x and y coordinates as numbers (not strings)
-                    6. Follows the exact structure shown above
-                    7. Has no trailing commas
-                    8. Has no comments within the JSON`;
+                    5. Has no trailing commas
+                    6. Has no comments within the JSON`;
 
                     this.logWarning(`Retrying analysis (${retries}/3 attempts remaining)`);
                     // Wait 2 seconds before retrying
@@ -310,66 +270,36 @@ Ensure each pair of scores are exact opposites and distributed at different angl
             
             const documentId = await documentModule.addDocument(this.spaceId, documentObj);
 
-            // Add chapters and paragraphs for each bias
+            // Add chapters for each bias
             this.logProgress("Adding chapters and paragraphs...");
             const chapterIds = [];
 
-            // First, add the original text as the first chapter
-            const textChapterData = {
-                title: "Original Text",
-                idea: "The text that was analyzed for biases"
-            };
-            const textChapterId = await documentModule.addChapter(this.spaceId, documentId, textChapterData);
-            chapterIds.push(textChapterId);
-
-            // Add the full text as a paragraph
-            const textParagraphObj = {
-                text: this.parameters.text,
-                commands: {}
-            };
-            await documentModule.addParagraph(this.spaceId, documentId, textChapterId, textParagraphObj);
-            this.logInfo("Added original text chapter");
-
-            // Then add chapters for each bias
-            for (let i = 0; i < result.bias_pairs.length; i++) {
+            // Add chapters for each bias
+            for (let i = 0; i < result.biases.length; i++) {
                 // Create chapter for each bias
-                const chapterTitle = `${result.bias_pairs[i].bias_type} (Positive: ${JSON.stringify(result.bias_pairs[i].positive.score)}, Negative: ${JSON.stringify(result.bias_pairs[i].negative.score)})`;
                 const chapterData = {
-                    title: chapterTitle,
-                    idea: `Analysis of ${result.bias_pairs[i].bias_type} bias with positive score ${JSON.stringify(result.bias_pairs[i].positive.score)} and negative score ${JSON.stringify(result.bias_pairs[i].negative.score)}`
+                    title: result.biases[i].bias_type,
+                    idea: `Analysis of ${result.biases[i].bias_type} bias`
                 };
 
                 const chapterId = await documentModule.addChapter(this.spaceId, documentId, chapterData);
                 chapterIds.push(chapterId);
-                this.logInfo(`Added chapter for bias: ${result.bias_pairs[i].bias_type}`, {
+                this.logInfo(`Added chapter for bias: ${result.biases[i].bias_type}`, {
                     documentId: documentId,
                     chapterId: chapterId
                 });
 
                 // Add explanation as paragraph
                 const paragraphObj = {
-                    text: result.bias_pairs[i].positive.explanation,
+                    text: result.biases[i].explanation,
                     commands: {}
                 };
 
                 const paragraphId = await documentModule.addParagraph(this.spaceId, documentId, chapterId, paragraphObj);
-                this.logInfo(`Added paragraph for positive bias explanation`, {
+                this.logInfo(`Added paragraph for bias explanation`, {
                     documentId: documentId,
                     chapterId: chapterId,
                     paragraphId: paragraphId
-                });
-
-                // Add explanation as paragraph
-                const negativeParagraphObj = {
-                    text: result.bias_pairs[i].negative.explanation,
-                    commands: {}
-                };
-
-                const negativeParagraphId = await documentModule.addParagraph(this.spaceId, documentId, chapterId, negativeParagraphObj);
-                this.logInfo(`Added paragraph for negative bias explanation`, {
-                    documentId: documentId,
-                    chapterId: chapterId,
-                    paragraphId: negativeParagraphId
                 });
             }
 
