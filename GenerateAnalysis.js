@@ -244,7 +244,7 @@ CRITICAL JSON FORMATTING REQUIREMENTS:
 
                     this.logWarning(`Retrying analysis (${retries}/3 attempts remaining)`);
                     // Wait 2 seconds before retrying
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    await new Promise(resolve => setTimeout(resolve, 6000));
                 }
             }
 

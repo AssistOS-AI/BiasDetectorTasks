@@ -103,8 +103,54 @@ module.exports = {
 
                     try {
                         // Clean the response message before parsing
-                        const cleanedMessage = response.message.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
-                        explanations = JSON.parse(cleanedMessage);
+                        let cleanedMessage = response.message
+                            // Remove any control characters
+                            .replace(/[\x00-\x1F\x7F-\x9F]/g, '')
+                            // Remove any text after the last closing brace
+                            .replace(/}[^}]*$/, '}')
+                            // Remove any metadata tags
+                            .replace(/metadata:\[.*?\]/g, '')
+                            // Fix any truncated strings at the end
+                            .replace(/("[^"]*?)$/, '$1"')
+                            // Fix array formatting issues
+                            .replace(/,(\s*[\]}])/g, '$1')  // Remove trailing commas
+                            .replace(/([{\[]\s*),/g, '$1')  // Remove leading commas
+                            .replace(/}\s*{/g, '},{')       // Fix object separation in arrays
+                            .replace(/\]\s*\[/g, '],[');    // Fix array separation
+
+                        // Try to extract just the valid JSON part
+                        const jsonMatch = cleanedMessage.match(/\{[^]*\}/);
+                        if (jsonMatch) {
+                            cleanedMessage = jsonMatch[0];
+                        }
+
+                        // Verify we have matching braces
+                        const openBraces = (cleanedMessage.match(/{/g) || []).length;
+                        const closeBraces = (cleanedMessage.match(/}/g) || []).length;
+                        if (openBraces > closeBraces) {
+                            cleanedMessage += '}'.repeat(openBraces - closeBraces);
+                        }
+
+                        // Verify we have matching square brackets
+                        const openBrackets = (cleanedMessage.match(/\[/g) || []).length;
+                        const closeBrackets = (cleanedMessage.match(/\]/g) || []).length;
+                        if (openBrackets > closeBrackets) {
+                            cleanedMessage = cleanedMessage.replace(/}$/, ']}');
+                        }
+
+                        this.logInfo('Cleaned message:', cleanedMessage);
+                        
+                        // Try to parse, and if it fails, attempt to fix common array issues
+                        try {
+                            explanations = JSON.parse(cleanedMessage);
+                        } catch (initialParseError) {
+                            // If parsing fails, try to fix array formatting
+                            cleanedMessage = cleanedMessage
+                                .replace(/\}\s*\}/g, '}]}')  // Fix nested object closure
+                                .replace(/\}\s*$/, '}]}');   // Ensure proper array closure
+                            explanations = JSON.parse(cleanedMessage);
+                        }
+                        
                         this.logInfo('Successfully parsed explanations:', explanations);
 
                         // Validate the structure
