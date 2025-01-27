@@ -1,6 +1,12 @@
 module.exports = {
     runTask: async function () {
         try {
+            // Configuration constants
+            const MIN_SCORE = -10;
+            const MAX_SCORE = 10;
+            const MIN_WORDS = 450;
+            const MAX_WORDS = 500;
+
             this.logInfo("Initializing bias explanation task...");
             const llmModule = await this.loadModule("llm");
             const personalityModule = await this.loadModule("personality");
@@ -25,46 +31,25 @@ module.exports = {
                 throw new Error('Source document not found');
             }
 
-            // Extract original text from first chapter
-            const originalText = sourceDoc.chapters[0]?.paragraphs[0]?.text;
-            if (!originalText) {
-                throw new Error('Original text not found in source document');
-            }
-
-            // Extract bias pairs from chapters
-            let biasPairs = [];
-            for (let i = 1; i < sourceDoc.chapters.length; i++) {
+            // Extract paragraphs and their biases from chapters
+            let biasAnalyses = [];
+            for (let i = 0; i < sourceDoc.chapters.length; i++) {
                 const chapter = sourceDoc.chapters[i];
-                const titleMatch = chapter.title.match(/(.+?)\s*\(Positive:\s*(\{.*?\}),\s*Negative:\s*(\{.*?\})\)/);
-                
-                if (titleMatch) {
-                    const biasType = titleMatch[1].trim();
-                    const positiveScore = JSON.parse(titleMatch[2]);
-                    const negativeScore = JSON.parse(titleMatch[3]);
-                    const positiveExplanation = chapter.paragraphs[0]?.text || '';
-                    const negativeExplanation = chapter.paragraphs[1]?.text || '';
-
-                    biasPairs.push({
-                        bias_type: biasType,
-                        positive: {
-                            score: positiveScore,
-                            explanation: positiveExplanation
-                        },
-                        negative: {
-                            score: negativeScore,
-                            explanation: negativeExplanation
-                        }
+                if (chapter.paragraphs && chapter.paragraphs[0]) {
+                    biasAnalyses.push({
+                        bias_type: chapter.title,
+                        text: chapter.paragraphs[0].text
                     });
                 }
             }
 
-            // Generate detailed explanations for each bias
-            this.logProgress("Generating detailed explanations...");
+            // Generate scores and explanations for each bias
+            this.logProgress("Generating detailed explanations and scores...");
             let retries = 3;
             let response;
             let explanations;
 
-            const getLLMResponseWithTimeout = async (prompt, timeout = 20000) => {
+            const getLLMResponseWithTimeout = async (prompt, timeout = 90000) => {
                 return Promise.race([
                     llmModule.generateText(this.spaceId, prompt, personalityObj.id),
                     new Promise((_, reject) =>
@@ -74,78 +59,86 @@ module.exports = {
             };
 
             let explanationPrompt = `
-            As ${personalityObj.name}, analyze the following text and explain the bias scores in detail:
+            As ${personalityObj.name}, analyze each bias explanation and provide:
+            1. A score from ${MIN_SCORE} to ${MAX_SCORE} indicating the strength and direction of the bias
+            2. A detailed explanation (${MIN_WORDS}-${MAX_WORDS} words) of why this score was assigned
 
-            Original Text:
-            ${originalText}
+            For each bias, consider:
+            - The significance of the bias in the context
+            - The potential impact on readers or decision-making
+            - The subtlety or obviousness of the bias
+            - The broader implications of this type of bias
 
-            For each bias pair, explain:
-            1. Why these specific scores were chosen
-            2. Find and quote relevant parts of the text that demonstrate this bias
-            3. Analyze how the bias manifests in both positive and negative ways
-            4. Explain the impact of this bias on the reader's understanding
-
-            Bias Pairs to analyze:
-            ${JSON.stringify(biasPairs, null, 2)}
+            Biases to analyze:
+            ${JSON.stringify(biasAnalyses, null, 2)}
 
             CRITICAL JSON FORMATTING REQUIREMENTS:
             1. Your response MUST start with an opening curly brace {
             2. Your response MUST end with a closing curly brace }
             3. Use double quotes for all strings
-            4. Do not include any text, comments, or explanations outside the JSON structure
-            5. Ensure all JSON keys and values are properly quoted and formatted
-            6. Follow this exact structure:
+            4. Do not include any text outside the JSON structure
+            5. Do not use any special characters or line breaks within strings
+            6. Each explanation must be a single, clean paragraph without repetition
+            7. Do not use colons or special punctuation within the text
+            8. Keep explanations focused and avoid repeating phrases
+            9. Follow this exact structure:
 
             {
-                "detailed_explanations": [
+                "scored_biases": [
                     {
-                        "bias_type": "name of bias",
-                        "score_explanation": "detailed explanation of why these scores were chosen",
-                        "supporting_quotes": ["quote 1", "quote 2"],
-                        "positive_analysis": "detailed analysis of positive manifestation",
-                        "negative_analysis": "detailed analysis of negative manifestation",
-                        "impact_analysis": "analysis of the bias impact"
+                        "bias_type": "name of bias from input",
+                        "score": number between ${MIN_SCORE} and ${MAX_SCORE},
+                        "detailed_explanation": "A single clean paragraph explaining the score"
                     }
                 ]
             }`;
 
             while (retries > 0) {
                 try {
-                    this.logProgress(`Generating bias explanation (attempt ${4 - retries}/3)...`);
+                    this.logProgress(`Generating explanations (attempt ${4 - retries}/3)...`);
                     this.logInfo('Sending prompt to LLM:', explanationPrompt);
-                    
+
                     response = await getLLMResponseWithTimeout(explanationPrompt);
                     this.logInfo('Raw LLM response:', response);
-                    this.logInfo('LLM response message:', response.message);
 
                     try {
-                        explanations = JSON.parse(response.message);
+                        // Clean the response message before parsing
+                        const cleanedMessage = response.message.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+                        explanations = JSON.parse(cleanedMessage);
                         this.logInfo('Successfully parsed explanations:', explanations);
 
                         // Validate the structure
-                        if (!explanations.detailed_explanations || !Array.isArray(explanations.detailed_explanations)) {
-                            throw new Error('Invalid response format: detailed_explanations array is missing or not an array');
+                        if (!explanations.scored_biases || !Array.isArray(explanations.scored_biases)) {
+                            throw new Error('Invalid response format: scored_biases array is missing or not an array');
                         }
 
-                        if (explanations.detailed_explanations.length !== biasPairs.length) {
-                            throw new Error(`Invalid response format: Expected ${biasPairs.length} explanations, got ${explanations.detailed_explanations.length}`);
+                        if (explanations.scored_biases.length !== biasAnalyses.length) {
+                            throw new Error(`Invalid response format: Expected ${biasAnalyses.length} explanations, got ${explanations.scored_biases.length}`);
                         }
 
                         // Validate each explanation
-                        explanations.detailed_explanations.forEach((exp, idx) => {
-                            if (!exp.bias_type || !exp.score_explanation || !exp.supporting_quotes || 
-                                !exp.positive_analysis || !exp.negative_analysis || !exp.impact_analysis) {
+                        explanations.scored_biases.forEach((exp, idx) => {
+                            if (!exp.bias_type || typeof exp.score !== 'number' || !exp.detailed_explanation) {
                                 throw new Error(`Missing required fields in explanation ${idx + 1}`);
                             }
-                            if (!Array.isArray(exp.supporting_quotes)) {
-                                throw new Error(`supporting_quotes must be an array in explanation ${idx + 1}`);
+                            if (exp.score < MIN_SCORE || exp.score > MAX_SCORE) {
+                                throw new Error(`Score must be between ${MIN_SCORE} and ${MAX_SCORE} in explanation ${idx + 1}`);
+                            }
+                            // Check for repetitive patterns in explanation
+                            const repetitivePattern = /([\w\s]{20,})\1/;
+                            if (repetitivePattern.test(exp.detailed_explanation)) {
+                                throw new Error(`Explanation ${idx + 1} contains repetitive text patterns`);
+                            }
+                            // Log word count but don't enforce it
+                            const wordCount = exp.detailed_explanation.split(/\s+/).length;
+                            if (wordCount < MIN_WORDS || wordCount > MAX_WORDS) {
+                                this.logWarning(`Note: Explanation ${idx + 1} has ${wordCount} words (suggested range was ${MIN_WORDS}-${MAX_WORDS} words)`);
                             }
                         });
 
-                        break; // If we get here, the response is valid
+                        break;
                     } catch (parseError) {
                         this.logError('Failed to parse or validate LLM response:', parseError);
-                        this.logError('Response that failed:', response.message);
                         throw parseError;
                     }
                 } catch (error) {
@@ -158,201 +151,119 @@ module.exports = {
                         throw error;
                     }
 
-                    // Modify the prompt based on the error
-                    if (error.message.includes('JSON')) {
-                        explanationPrompt += `\n\nPrevious attempt failed with JSON parsing error: ${errorMessage}
-                        Please ensure your response:
-                        1. Is valid JSON that starts with { and ends with }
-                        2. Uses double quotes for all strings
-                        3. Has no trailing commas
-                        4. Has no comments within the JSON
-                        5. Has properly escaped quotes within strings
-                        6. Contains no special characters or line breaks in strings`;
-                    } else if (error.message.includes('array')) {
-                        explanationPrompt += `\n\nPrevious attempt failed with array validation error: ${errorMessage}
-                        Please ensure:
-                        1. The detailed_explanations field is an array
-                        2. The array contains exactly ${biasPairs.length} explanations
-                        3. Each explanation has all required fields
-                        4. The supporting_quotes field is an array`;
-                    } else {
-                        explanationPrompt += `\n\nPrevious attempt failed with error: ${errorMessage}
-                        Please ensure your response follows the exact structure shown above and includes all required fields.`;
-                    }
+                    explanationPrompt += `\n\nPrevious attempt failed with error: ${errorMessage}
+                    Please ensure your response:
+                    1. Is valid JSON
+                    2. Contains exactly ${biasAnalyses.length} scored_biases
+                    3. Each bias has a valid score between ${MIN_SCORE} and ${MAX_SCORE}
+                    4. Each explanation is a single clean paragraph without repetition
+                    5. No special characters or line breaks in text
+                    6. No colons or complex punctuation in explanations`;
 
                     this.logWarning(`Retrying explanation generation (${retries}/3 attempts remaining)`);
-                    // Wait 2 seconds before retrying
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 }
             }
 
-            // Create visualization chapter
-            const chapters = [];
-            
-            // Add diagram chapter
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = 1200;
-            tempCanvas.height = 1000;
-            const ctx = tempCanvas.getContext('2d');
+            // Create visualization data
+            this.logProgress("Creating visualization data...");
 
-            // Draw the visualization
-            const width = tempCanvas.width;
-            const height = tempCanvas.height;
-            const centerX = width / 2;
-            const centerY = height / 2;
-            const padding = 80;
+            const width = 800;
+            const height = 600;
+            const padding = 60;
 
-            // Set up scale
-            const maxValue = 10;
-            const scale = (Math.min(width, height) - 2 * padding) / (2 * maxValue);
+            // Load and create canvas
+            const canvasModule = await this.loadModule("canvas");
+            this.logInfo("Canvas module loaded");
+            this.logInfo("Canvas module methods:", Object.keys(canvasModule));
 
-            // Clear canvas with white background
-            ctx.fillStyle = '#FFFFFF';
+            // Try different ways to create canvas
+            let canvas;
+            if (typeof canvasModule === 'function') {
+                canvas = new canvasModule(width, height);
+            } else if (canvasModule.createCanvas) {
+                canvas = canvasModule.createCanvas(width, height);
+            } else if (canvasModule.default) {
+                canvas = new canvasModule.default(width, height);
+            } else {
+                throw new Error("No valid canvas creation method found. Available methods: " + Object.keys(canvasModule).join(", "));
+            }
+
+            const ctx = canvas.getContext('2d');
+
+            // Set white background
+            ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, width, height);
 
-            // Draw grid lines
-            ctx.strokeStyle = '#EEEEEE';
-            ctx.lineWidth = 1;
-            for (let i = -maxValue; i <= maxValue; i++) {
-                // Vertical grid line
-                const x = centerX + i * scale;
-                ctx.beginPath();
-                ctx.moveTo(x, padding);
-                ctx.lineTo(x, height - padding);
-                ctx.stroke();
+            // Draw axes
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            // Horizontal axis
+            ctx.moveTo(padding, height/2);
+            ctx.lineTo(width - padding, height/2);
+            // Vertical axis
+            ctx.moveTo(width/2, padding);
+            ctx.lineTo(width/2, height - padding);
+            ctx.stroke();
 
-                // Horizontal grid line
-                const y = centerY - i * scale;
+            // Draw grid lines
+            ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 10; i++) {
+                const y = padding + i * (height - 2 * padding) / 10;
                 ctx.beginPath();
                 ctx.moveTo(padding, y);
                 ctx.lineTo(width - padding, y);
                 ctx.stroke();
             }
 
-            // Draw axes
-            ctx.strokeStyle = '#CCCCCC';
-            ctx.lineWidth = 1;
+            // Add score labels
+            ctx.fillStyle = 'black';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'right';
+            for (let score = -10; score <= 10; score += 2) {
+                const y = height/2 - score * (height - 2*padding)/20;
+                ctx.fillText(score.toString(), width/2 - 10, y);
+            }
 
-            // X-axis
-            ctx.beginPath();
-            ctx.moveTo(padding, centerY);
-            ctx.lineTo(width - padding, centerY);
-            ctx.stroke();
+            // Plot points
+            ctx.fillStyle = 'rgb(54, 162, 235)';
+            explanations.scored_biases.forEach((bias, index) => {
+                const x = padding + (index + 1) * (width - 2*padding)/(explanations.scored_biases.length + 1);
+                const y = height/2 - bias.score * (height - 2*padding)/20;
 
-            // Y-axis
-            ctx.beginPath();
-            ctx.moveTo(centerX, padding);
-            ctx.lineTo(centerX, height - padding);
-            ctx.stroke();
-
-            // Add axis labels
-            ctx.fillStyle = '#666666';
-            ctx.font = '28px Arial';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-
-            // X-axis labels (only -10, -5, 5, 10)
-            const labelValues = [-10, -5, 5, 10];
-            labelValues.forEach(value => {
-                const x = centerX + value * scale;
-                ctx.fillText(value.toString(), x, centerY + 35);
-            });
-
-            // Y-axis labels (only -10, -5, 5, 10)
-            labelValues.forEach(value => {
-                const y = centerY - value * scale;
-                ctx.fillText(value.toString(), centerX - 35, y);
-            });
-
-            // Add single 0 at center
-            ctx.fillText('0', centerX - 35, centerY + 35);
-
-            // Plot data points and connecting lines
-            const colors = ['#FF0000', '#FFA500', '#FFD700', '#32CD32', '#4169E1', '#8A2BE2', '#FF69B4'];
-            biasPairs.forEach((pair, index) => {
-                // Get color for this pair (cycle through colors if more pairs than colors)
-                const color = colors[index % colors.length];
-
-                // Draw connecting line first (so it's behind points)
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 2;
+                // Draw point
                 ctx.beginPath();
-                const x1 = centerX + pair.positive.score.x * scale;
-                const y1 = centerY - pair.positive.score.y * scale;
-                const x2 = centerX + pair.negative.score.x * scale;
-                const y2 = centerY - pair.negative.score.y * scale;
-                ctx.moveTo(x1, y1);
-                ctx.lineTo(x2, y2);
-                ctx.stroke();
-
-                // Plot points on top of line
-                ctx.fillStyle = '#000000';
-                // Plot positive bias
-                ctx.beginPath();
-                ctx.arc(x1, y1, 10, 0, 2 * Math.PI);
+                ctx.arc(x, y, 6, 0, 2 * Math.PI);
                 ctx.fill();
 
-                // Plot negative bias
-                ctx.beginPath();
-                ctx.arc(x2, y2, 10, 0, 2 * Math.PI);
-                ctx.fill();
+                // Add label
+                ctx.save();
+                ctx.translate(x, height - padding/2);
+                ctx.rotate(-Math.PI/4);
+                ctx.fillStyle = 'black';
+                ctx.textAlign = 'right';
+                ctx.fillText(bias.bias_type, 0, 0);
+                ctx.restore();
             });
 
-            // Convert canvas to binary data
-            const blob = await new Promise(resolve => tempCanvas.toBlob(resolve, 'image/png'));
-            const arrayBuffer = await blob.arrayBuffer();
-            const uint8Array = new Uint8Array(arrayBuffer);
-            
-            const imageId = await spaceModule.putImage(uint8Array);
-            
-            chapters.push({
-                title: "Bias Score Visualization",
-                content: "",
-                commands: {
-                    image: {
-                        id: imageId,
-                        width: tempCanvas.width,
-                        height: tempCanvas.height
-                    }
-                }
-            });
+            // Convert canvas to buffer
+            const buffer = canvas.toBuffer('image/png');
+            this.logInfo("Canvas converted to PNG buffer successfully");
 
-            // Add detailed explanation chapters
-            explanations.detailed_explanations.forEach((explanation, index) => {
-                const biasPair = biasPairs[index];
-                chapters.push({
-                    title: explanation.bias_type,
-                    content: "",
-                    paragraphs: [
-                        {
-                            text: `Score Analysis:\n${explanation.score_explanation}`,
-                            commands: {}
-                        },
-                        {
-                            text: "Supporting Quotes:\n" + explanation.supporting_quotes.join("\n\n"),
-                            commands: {}
-                        },
-                        {
-                            text: `Positive Manifestation:\n${explanation.positive_analysis}`,
-                            commands: {}
-                        },
-                        {
-                            text: `Negative Manifestation:\n${explanation.negative_analysis}`,
-                            commands: {}
-                        },
-                        {
-                            text: `Impact Analysis:\n${explanation.impact_analysis}`,
-                            commands: {}
-                        }
-                    ]
-                });
-            });
+            // Save image using spaceModule
+            const imageId = await spaceModule.putImage(buffer);
+            this.logInfo("Image saved successfully with ID:", imageId);
 
             // Create and save the document
+            this.logProgress("Creating document object...");
             const documentObj = {
                 title: `bias_explained_${new Date().toISOString()}`,
                 type: 'bias_explained',
-                content: JSON.stringify(chapters, null, 2),
+                content: JSON.stringify({
+                    explanations
+                }, null, 2),
                 abstract: JSON.stringify({
                     type: "bias_explained",
                     sourceDocumentId: this.parameters.sourceDocumentId,
@@ -366,27 +277,53 @@ module.exports = {
             };
 
             const documentId = await documentModule.addDocument(this.spaceId, documentObj);
+            this.logInfo("Document created successfully with ID:", documentId);
 
-            // Add chapters and paragraphs
-            for (const chapter of chapters) {
+            // Add visualization chapter first
+            const visualChapter = {
+                title: "Bias Score Distribution",
+                idea: "Visual representation of bias scores"
+            };
+            const visualChapterId = await documentModule.addChapter(this.spaceId, documentId, visualChapter);
+            this.logInfo("Visualization chapter added with ID:", visualChapterId);
+
+            // Add visualization paragraph with image
+            await documentModule.addParagraph(this.spaceId, documentId, visualChapterId, {
+                text: "Distribution of bias scores from -10 to 10:",
+                commands: {
+                    image: {
+                        id: imageId
+                    }
+                }
+            });
+            this.logInfo("Visualization paragraph added successfully");
+
+            // Add score summary
+            await documentModule.addParagraph(this.spaceId, documentId, visualChapterId, {
+                text: explanations.scored_biases.map(bias =>
+                    `${bias.bias_type}: ${bias.score}`
+                ).join('\n'),
+                commands: {}
+            });
+
+            // Add detailed chapters for each bias
+            this.logProgress("Adding detailed bias chapters...");
+            for (const bias of explanations.scored_biases) {
                 const chapterData = {
-                    title: chapter.title,
-                    idea: `Detailed analysis of ${chapter.title}`
+                    title: bias.bias_type,
+                    idea: `Analysis of ${bias.bias_type} (Score: ${bias.score})`
                 };
 
                 const chapterId = await documentModule.addChapter(this.spaceId, documentId, chapterData);
-
-                if (chapter.paragraphs) {
-                    for (const paragraph of chapter.paragraphs) {
-                        await documentModule.addParagraph(this.spaceId, documentId, chapterId, paragraph);
-                    }
-                } else {
-                    await documentModule.addParagraph(this.spaceId, documentId, chapterId, {
-                        text: chapter.content,
-                        commands: chapter.commands || {}
-                    });
-                }
+                await documentModule.addParagraph(this.spaceId, documentId, chapterId, {
+                    text: bias.detailed_explanation,
+                    commands: {}
+                });
+                this.logInfo(`Added chapter for bias: ${bias.bias_type}`);
             }
+
+            this.logProgress("Task completed successfully!");
+            this.logInfo("Document saved and accessible at ID:", documentId);
 
             return {
                 status: 'completed',
