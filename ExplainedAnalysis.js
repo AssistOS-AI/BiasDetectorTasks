@@ -172,80 +172,62 @@ module.exports = {
             const height = 600;
             const padding = 60;
 
-            // Load and create canvas
-            const canvasModule = await this.loadModule("canvas");
-            this.logInfo("Canvas module loaded");
-            this.logInfo("Canvas module methods:", Object.keys(canvasModule));
+            // Load canvas using require
+            const { createCanvas } = require('canvas');
+            this.logInfo("Canvas module loaded via require");
 
-            // Try different ways to create canvas
-            let canvas;
-            if (typeof canvasModule === 'function') {
-                canvas = new canvasModule(width, height);
-            } else if (canvasModule.createCanvas) {
-                canvas = canvasModule.createCanvas(width, height);
-            } else if (canvasModule.default) {
-                canvas = new canvasModule.default(width, height);
-            } else {
-                throw new Error("No valid canvas creation method found. Available methods: " + Object.keys(canvasModule).join(", "));
-            }
-
+            // Create canvas
+            const canvas = createCanvas(width, height);
             const ctx = canvas.getContext('2d');
 
             // Set white background
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, width, height);
 
-            // Draw axes
+            // Draw vertical axis on the left
             ctx.strokeStyle = 'black';
             ctx.lineWidth = 2;
             ctx.beginPath();
-            // Horizontal axis
-            ctx.moveTo(padding, height/2);
-            ctx.lineTo(width - padding, height/2);
-            // Vertical axis
-            ctx.moveTo(width/2, padding);
-            ctx.lineTo(width/2, height - padding);
+            ctx.moveTo(padding, padding);
+            ctx.lineTo(padding, height - padding);
             ctx.stroke();
 
-            // Draw grid lines
+            // Draw grid lines and score labels
             ctx.strokeStyle = 'rgba(0,0,0,0.1)';
             ctx.lineWidth = 1;
-            for (let i = 0; i <= 10; i++) {
-                const y = padding + i * (height - 2 * padding) / 10;
+            ctx.fillStyle = 'black';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'right';
+
+            for (let score = 10; score >= -10; score -= 2) {
+                const y = padding + (10 - score) * (height - 2 * padding) / 20;
+                // Grid line
                 ctx.beginPath();
                 ctx.moveTo(padding, y);
                 ctx.lineTo(width - padding, y);
                 ctx.stroke();
+                // Score label
+                ctx.fillText(score.toString(), padding - 5, y + 4);
             }
 
-            // Add score labels
-            ctx.fillStyle = 'black';
-            ctx.font = '12px Arial';
-            ctx.textAlign = 'right';
-            for (let score = -10; score <= 10; score += 2) {
-                const y = height/2 - score * (height - 2*padding)/20;
-                ctx.fillText(score.toString(), width/2 - 10, y);
-            }
+            // Draw horizontal line at zero with 30% opacity
+            const zeroY = padding + (10 - 0) * (height - 2 * padding) / 20;
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+            ctx.moveTo(padding, zeroY);
+            ctx.lineTo(width - padding, zeroY);
+            ctx.stroke();
 
             // Plot points
             ctx.fillStyle = 'rgb(54, 162, 235)';
-            explanations.scored_biases.forEach((bias, index) => {
-                const x = padding + (index + 1) * (width - 2*padding)/(explanations.scored_biases.length + 1);
-                const y = height/2 - bias.score * (height - 2*padding)/20;
+            const x = padding + 100; // Fixed x position for all points
+            explanations.scored_biases.forEach((bias) => {
+                const y = padding + (10 - bias.score) * (height - 2 * padding) / 20;
 
                 // Draw point
                 ctx.beginPath();
                 ctx.arc(x, y, 6, 0, 2 * Math.PI);
                 ctx.fill();
-
-                // Add label
-                ctx.save();
-                ctx.translate(x, height - padding/2);
-                ctx.rotate(-Math.PI/4);
-                ctx.fillStyle = 'black';
-                ctx.textAlign = 'right';
-                ctx.fillText(bias.bias_type, 0, 0);
-                ctx.restore();
             });
 
             // Convert canvas to buffer
@@ -289,7 +271,7 @@ module.exports = {
 
             // Add visualization paragraph with image
             await documentModule.addParagraph(this.spaceId, documentId, visualChapterId, {
-                text: "Distribution of bias scores from -10 to 10:",
+                text: "",
                 commands: {
                     image: {
                         id: imageId
@@ -298,28 +280,20 @@ module.exports = {
             });
             this.logInfo("Visualization paragraph added successfully");
 
-            // Add score summary
-            await documentModule.addParagraph(this.spaceId, documentId, visualChapterId, {
-                text: explanations.scored_biases.map(bias =>
-                    `${bias.bias_type}: ${bias.score}`
-                ).join('\n'),
-                commands: {}
-            });
-
-            // Add detailed chapters for each bias
-            this.logProgress("Adding detailed bias chapters...");
+            // Add chapters for each bias with scores in titles
             for (const bias of explanations.scored_biases) {
                 const chapterData = {
-                    title: bias.bias_type,
-                    idea: `Analysis of ${bias.bias_type} (Score: ${bias.score})`
+                    title: `${bias.bias_type} (Score: ${bias.score})`,
+                    idea: `Analysis of ${bias.bias_type}`
                 };
 
                 const chapterId = await documentModule.addChapter(this.spaceId, documentId, chapterData);
+                this.logInfo(`Added chapter for bias: ${bias.bias_type}`);
+
                 await documentModule.addParagraph(this.spaceId, documentId, chapterId, {
                     text: bias.detailed_explanation,
                     commands: {}
                 });
-                this.logInfo(`Added chapter for bias: ${bias.bias_type}`);
             }
 
             this.logProgress("Task completed successfully!");
