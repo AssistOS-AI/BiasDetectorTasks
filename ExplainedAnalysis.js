@@ -2,10 +2,10 @@ module.exports = {
     runTask: async function () {
         try {
             // Configuration constants
-            const MIN_SCORE = -10;
+            const MIN_SCORE = 0;
             const MAX_SCORE = 10;
-            const MIN_WORDS = 450;
-            const MAX_WORDS = 500;
+            const MIN_WORDS = 50;
+            const MAX_WORDS = 100;
 
             this.logInfo("Initializing bias explanation task...");
             const llmModule = await this.loadModule("llm");
@@ -13,17 +13,56 @@ module.exports = {
             const documentModule = await this.loadModule("document");
             const spaceModule = await this.loadModule("space");
 
-            // Get personality
-            this.logProgress("Fetching personality details...");
-            const personality = await personalityModule.getPersonality(this.spaceId, this.parameters.personality);
-            if (!personality) {
-                throw new Error('Personality not found by ID');
+            // Validate and parse personality IDs
+            this.logProgress("Validating personality parameters...");
+            if (!this.parameters.personalities) {
+                throw new Error('No personalities provided');
             }
 
-            const personalityObj = await personalityModule.getPersonalityByName(this.spaceId, personality.name);
-            if (!personalityObj) {
-                throw new Error('Personality not found by name');
+            this.logInfo("Raw parameters:", {
+                type: typeof this.parameters.personalities,
+                value: this.parameters.personalities
+            });
+
+            let personalityIds;
+            if (typeof this.parameters.personalities === 'string') {
+                // Try to split by comma first
+                if (this.parameters.personalities.includes(',')) {
+                    personalityIds = this.parameters.personalities.split(',').map(id => id.trim());
+                    this.logInfo("Split by comma into:", personalityIds);
+                } else {
+                    // If no comma, check if it's a concatenated string that needs to be split
+                    this.logInfo("Raw personality string:", this.parameters.personalities);
+                    // Split the string into chunks of 16 characters (assuming each ID is 16 chars)
+                    personalityIds = this.parameters.personalities.match(/.{16}/g) || [this.parameters.personalities];
+                    this.logInfo("Split into 16-char chunks:", personalityIds);
+                }
+            } else if (Array.isArray(this.parameters.personalities)) {
+                personalityIds = this.parameters.personalities;
+                this.logInfo("Using array directly:", personalityIds);
+            } else {
+                throw new Error('Invalid personalities parameter format');
             }
+
+            this.logInfo("Final parsed personality IDs:", personalityIds);
+
+            // Get personalities
+            this.logProgress("Fetching personality details...");
+            const personalities = await Promise.all(
+                personalityIds.map(async (personalityId) => {
+                    const personality = await personalityModule.getPersonality(this.spaceId, personalityId);
+                    if (!personality) {
+                        throw new Error(`Personality not found by ID: ${personalityId}`);
+                    }
+                    const personalityObj = await personalityModule.getPersonalityByName(this.spaceId, personality.name);
+                    if (!personalityObj) {
+                        throw new Error(`Personality not found by name: ${personality.name}`);
+                    }
+                    return personalityObj;
+                })
+            );
+
+            this.logInfo("Successfully loaded personalities:", personalities.map(p => p.name));
 
             // Get source document
             const sourceDoc = await documentModule.getDocument(this.spaceId, this.parameters.sourceDocumentId);
@@ -43,186 +82,179 @@ module.exports = {
                 }
             }
 
-            // Generate scores and explanations for each bias
-            this.logProgress("Generating detailed explanations and scores...");
-            let retries = 3;
-            let response;
-            let explanations;
+            // Generate scores and explanations for each personality
+            let allPersonalityExplanations = [];
 
-            const getLLMResponseWithTimeout = async (prompt, timeout = 90000) => {
-                return Promise.race([
-                    llmModule.generateText(this.spaceId, prompt, personalityObj.id),
-                    new Promise((_, reject) =>
-                        setTimeout(() => reject(new Error('LLM request timed out')), timeout)
-                    )
-                ]);
-            };
+            for (const personality of personalities) {
+                this.logProgress(`Generating analysis for personality: ${personality.name}...`);
 
-            let explanationPrompt = `
-            As ${personalityObj.name}, analyze each bias explanation and provide:
-            1. A score from ${MIN_SCORE} to ${MAX_SCORE} indicating the strength and direction of the bias
-            2. A detailed explanation (${MIN_WORDS}-${MAX_WORDS} words) of why this score was assigned
+                let retries = 3;
+                let explanations;
 
-            For each bias, consider:
-            - The significance of the bias in the context
-            - The potential impact on readers or decision-making
-            - The subtlety or obviousness of the bias
-            - The broader implications of this type of bias
+                let explanationPrompt = `
+                As ${personality.name} (${personality.description}), analyze each bias explanation and provide:
+                1. Two scores from ${MIN_SCORE} to ${MAX_SCORE}:
+                   - A score indicating your level of support or agreement with this bias
+                   - A score indicating your level of opposition or disagreement with this bias
+                2. A detailed explanation (${MIN_WORDS}-${MAX_WORDS} words) of why you assigned these scores
 
-            Biases to analyze:
-            ${JSON.stringify(biasAnalyses, null, 2)}
+                For each bias, consider:
+                - The significance of the bias in the context
+                - The potential impact on readers or decision-making
+                - The subtlety or obviousness of the bias
+                - The broader implications of this type of bias
 
-            CRITICAL JSON FORMATTING REQUIREMENTS:
-            1. Your response MUST start with an opening curly brace {
-            2. Your response MUST end with a closing curly brace }
-            3. Use double quotes for all strings
-            4. Do not include any text outside the JSON structure
-            5. Do not use any special characters or line breaks within strings
-            6. Each explanation must be a single, clean paragraph without repetition
-            7. Do not use colons or special punctuation within the text
-            8. Keep explanations focused and avoid repeating phrases
-            9. Follow this exact structure:
+                You MUST analyze ALL ${biasAnalyses.length} biases provided below.
+                Each bias MUST have both scores.
 
-            {
-                "scored_biases": [
+                Biases to analyze (${biasAnalyses.length} total):
+                ${JSON.stringify(biasAnalyses, null, 2)}
+
+                CRITICAL JSON FORMATTING REQUIREMENTS:
+                1. Your response MUST be PURE JSON - no markdown, no backticks, no extra text
+                2. You MUST analyze exactly ${biasAnalyses.length} biases, no more, no less
+                3. Each bias MUST have both for_score and against_score
+                4. Keep explanations concise (${MIN_WORDS}-${MAX_WORDS} words) to avoid truncation
+                5. Follow this exact structure and DO NOT deviate from it:
+                
+                [
                     {
                         "bias_type": "name of bias from input",
-                        "score": number between ${MIN_SCORE} and ${MAX_SCORE},
-                        "detailed_explanation": "A single clean paragraph explaining the score"
+                        "for_score": number between ${MIN_SCORE} and ${MAX_SCORE},
+                        "against_score": number between ${MIN_SCORE} and ${MAX_SCORE},
+                        "detailed_explanation": "A single concise paragraph explaining your perspective"
                     }
                 ]
-            }`;
 
-            while (retries > 0) {
-                try {
-                    this.logProgress(`Generating explanations (attempt ${4 - retries}/3)...`);
-                    this.logInfo('Sending prompt to LLM:', explanationPrompt);
+                STRICT JSON REQUIREMENTS:
+                - Response MUST start with [ and end with ]
+                - Use double quotes (") for all strings
+                - No single quotes (')
+                - No trailing commas
+                - No comments
+                - No line breaks within strings
+                - No extra fields or properties
+                - No markdown formatting or code blocks
+                - ONLY pure, valid JSON array
 
-                    response = await getLLMResponseWithTimeout(explanationPrompt);
-                    this.logInfo('Raw LLM response:', response);
+                IMPORTANT: 
+                - Analyze each bias from YOUR unique personality perspective
+                - Keep explanations between ${MIN_WORDS} and ${MAX_WORDS} words
+                - Ensure your scores and explanations reflect your distinct personality traits and viewpoints
+                - Make your analysis clearly different from how other personalities might view these biases
+                - Base your responses on your specific personality characteristics and background`;
 
+                const getLLMResponseWithTimeout = async (prompt, timeout = 90000) => {
+                    return Promise.race([
+                        llmModule.generateText(this.spaceId, prompt, personality.id),
+                        new Promise((_, reject) =>
+                            setTimeout(() => reject(new Error('LLM request timed out')), timeout)
+                        )
+                    ]);
+                };
+
+                while (retries > 0) {
                     try {
-                        // Clean the response message before parsing
-                        let cleanedMessage = response.message
-                            // Remove any control characters
-                            .replace(/[\x00-\x1F\x7F-\x9F]/g, '')
-                            // Remove any text after the last closing brace
-                            .replace(/}[^}]*$/, '}')
-                            // Remove any metadata tags
-                            .replace(/metadata:\[.*?\]/g, '')
-                            // Fix any truncated strings at the end
-                            .replace(/("[^"]*?)$/, '$1"')
-                            // Fix array formatting issues
-                            .replace(/,(\s*[\]}])/g, '$1')  // Remove trailing commas
-                            .replace(/([{\[]\s*),/g, '$1')  // Remove leading commas
-                            .replace(/}\s*{/g, '},{')       // Fix object separation in arrays
-                            .replace(/\]\s*\[/g, '],[');    // Fix array separation
+                        this.logProgress(`Generating explanations (attempt ${4 - retries}/3)...`);
+                        this.logInfo('Sending prompt to LLM:', explanationPrompt);
 
-                        // Try to extract just the valid JSON part
-                        const jsonMatch = cleanedMessage.match(/\{[^]*\}/);
-                        if (jsonMatch) {
-                            cleanedMessage = jsonMatch[0];
-                        }
+                        const response = await getLLMResponseWithTimeout(explanationPrompt);
+                        this.logInfo('Raw LLM response:', response);
 
-                        // Verify we have matching braces
-                        const openBraces = (cleanedMessage.match(/{/g) || []).length;
-                        const closeBraces = (cleanedMessage.match(/}/g) || []).length;
-                        if (openBraces > closeBraces) {
-                            cleanedMessage += '}'.repeat(openBraces - closeBraces);
-                        }
-
-                        // Verify we have matching square brackets
-                        const openBrackets = (cleanedMessage.match(/\[/g) || []).length;
-                        const closeBrackets = (cleanedMessage.match(/\]/g) || []).length;
-                        if (openBrackets > closeBrackets) {
-                            cleanedMessage = cleanedMessage.replace(/}$/, ']}');
-                        }
-
-                        this.logInfo('Cleaned message:', cleanedMessage);
-                        
-                        // Try to parse, and if it fails, attempt to fix common array issues
                         try {
-                            explanations = JSON.parse(cleanedMessage);
-                        } catch (initialParseError) {
-                            // If parsing fails, try to fix array formatting
-                            cleanedMessage = cleanedMessage
-                                .replace(/\}\s*\}/g, '}]}')  // Fix nested object closure
-                                .replace(/\}\s*$/, '}]}');   // Ensure proper array closure
-                            explanations = JSON.parse(cleanedMessage);
+                            // Use response.message directly without cleaning
+                            let cleanedMessage = response.message;
+                            this.logInfo('Message before parsing:', cleanedMessage);
+
+                            try {
+                                explanations = JSON.parse(cleanedMessage);
+                                // Convert the array response to the expected structure
+                                if (Array.isArray(explanations)) {
+                                    explanations = { scored_biases: explanations };
+                                }
+                            } catch (parseError) {
+                                this.logError('JSON parse error:', parseError);
+                                throw new Error(`Invalid JSON format: ${parseError.message}`);
+                            }
+
+                            this.logInfo('Parsed explanations structure:', {
+                                has_scored_biases: !!explanations.scored_biases,
+                                is_array: Array.isArray(explanations.scored_biases),
+                                length: explanations.scored_biases?.length,
+                                expected_length: biasAnalyses.length
+                            });
+
+                            // Validate the structure
+                            if (!explanations.scored_biases || !Array.isArray(explanations.scored_biases)) {
+                                throw new Error('Invalid response format: scored_biases array is missing or not an array');
+                            }
+
+                            if (explanations.scored_biases.length !== biasAnalyses.length) {
+                                throw new Error(`Invalid response format: Expected ${biasAnalyses.length} explanations, got ${explanations.scored_biases.length}`);
+                            }
+
+                            // Validate each explanation
+                            explanations.scored_biases.forEach((exp, idx) => {
+                                const missingFields = [];
+                                if (!exp.bias_type) missingFields.push('bias_type');
+                                if (typeof exp.for_score !== 'number') missingFields.push('for_score');
+                                if (typeof exp.against_score !== 'number') missingFields.push('against_score');
+                                if (!exp.detailed_explanation) missingFields.push('detailed_explanation');
+
+                                if (missingFields.length > 0) {
+                                    throw new Error(`Missing or invalid fields in explanation ${idx + 1}: ${missingFields.join(', ')}`);
+                                }
+
+                                if (exp.for_score < MIN_SCORE || exp.for_score > MAX_SCORE ||
+                                    exp.against_score < MIN_SCORE || exp.against_score > MAX_SCORE) {
+                                    throw new Error(`Scores must be between ${MIN_SCORE} and ${MAX_SCORE} in explanation ${idx + 1}`);
+                                }
+                            });
+
+                            break;
+                        } catch (parseError) {
+                            this.logError('Failed to parse or validate LLM response:', parseError);
+                            throw parseError;
                         }
-                        
-                        this.logInfo('Successfully parsed explanations:', explanations);
+                    } catch (error) {
+                        retries--;
+                        const errorMessage = error.message || 'Unknown error';
+                        this.logWarning(`Explanation generation failed: ${errorMessage}`);
 
-                        // Validate the structure
-                        if (!explanations.scored_biases || !Array.isArray(explanations.scored_biases)) {
-                            throw new Error('Invalid response format: scored_biases array is missing or not an array');
+                        if (retries === 0) {
+                            this.logError(`Failed to generate valid explanation after all retries: ${errorMessage}`);
+                            throw error;
                         }
 
-                        if (explanations.scored_biases.length !== biasAnalyses.length) {
-                            throw new Error(`Invalid response format: Expected ${biasAnalyses.length} explanations, got ${explanations.scored_biases.length}`);
-                        }
+                        // Add more context to the retry prompt
+                        explanationPrompt += `\n\nPrevious attempt failed with error: ${errorMessage}
+                        Please ensure your response:
+                        1. Is valid JSON
+                        2. Contains EXACTLY ${biasAnalyses.length} scored_biases (you provided wrong number)
+                        3. Each bias has both for_score and against_score between ${MIN_SCORE} and ${MAX_SCORE}
+                        4. Each explanation is a single clean paragraph
+                        5. No special characters or line breaks in text
+                        6. Each bias from the input is analyzed`;
 
-                        // Validate each explanation
-                        explanations.scored_biases.forEach((exp, idx) => {
-                            if (!exp.bias_type || typeof exp.score !== 'number' || !exp.detailed_explanation) {
-                                throw new Error(`Missing required fields in explanation ${idx + 1}`);
-                            }
-                            if (exp.score < MIN_SCORE || exp.score > MAX_SCORE) {
-                                throw new Error(`Score must be between ${MIN_SCORE} and ${MAX_SCORE} in explanation ${idx + 1}`);
-                            }
-                            // Check for repetitive patterns in explanation
-                            const repetitivePattern = /([\w\s]{20,})\1/;
-                            if (repetitivePattern.test(exp.detailed_explanation)) {
-                                throw new Error(`Explanation ${idx + 1} contains repetitive text patterns`);
-                            }
-                            // Log word count but don't enforce it
-                            const wordCount = exp.detailed_explanation.split(/\s+/).length;
-                            if (wordCount < MIN_WORDS || wordCount > MAX_WORDS) {
-                                this.logWarning(`Note: Explanation ${idx + 1} has ${wordCount} words (suggested range was ${MIN_WORDS}-${MAX_WORDS} words)`);
-                            }
-                        });
-
-                        break;
-                    } catch (parseError) {
-                        this.logError('Failed to parse or validate LLM response:', parseError);
-                        throw parseError;
+                        this.logWarning(`Retrying explanation generation (${retries}/3 attempts remaining)`);
+                        await new Promise(resolve => setTimeout(resolve, 2000));
                     }
-                } catch (error) {
-                    retries--;
-                    const errorMessage = error.message || 'Unknown error';
-                    this.logWarning(`Explanation generation failed: ${errorMessage}`);
-
-                    if (retries === 0) {
-                        this.logError(`Failed to generate valid explanation after all retries: ${errorMessage}`);
-                        throw error;
-                    }
-
-                    explanationPrompt += `\n\nPrevious attempt failed with error: ${errorMessage}
-                    Please ensure your response:
-                    1. Is valid JSON
-                    2. Contains exactly ${biasAnalyses.length} scored_biases
-                    3. Each bias has a valid score between ${MIN_SCORE} and ${MAX_SCORE}
-                    4. Each explanation is a single clean paragraph without repetition
-                    5. No special characters or line breaks in text
-                    6. No colons or complex punctuation in explanations`;
-
-                    this.logWarning(`Retrying explanation generation (${retries}/3 attempts remaining)`);
-                    await new Promise(resolve => setTimeout(resolve, 2000));
                 }
+
+                explanations.personality = personality.name;
+                allPersonalityExplanations.push(explanations);
             }
 
             // Create visualization data
             this.logProgress("Creating visualization data...");
 
-            const width = 800;
-            const height = 600;
-            const padding = 60;
+            const width = 1000;
+            const height = 800;
+            const padding = 100;
+            const centerX = width / 2;
 
             // Load canvas using require
             const { createCanvas } = require('canvas');
-            this.logInfo("Canvas module loaded via require");
-
-            // Create canvas
             const canvas = createCanvas(width, height);
             const ctx = canvas.getContext('2d');
 
@@ -230,12 +262,12 @@ module.exports = {
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, width, height);
 
-            // Draw vertical axis on the left
-            ctx.strokeStyle = 'black';
+            // Draw central vertical axis
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)';  // 50% opacity black
             ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.moveTo(padding, padding);
-            ctx.lineTo(padding, height - padding);
+            ctx.moveTo(centerX, padding);
+            ctx.lineTo(centerX, height - padding);
             ctx.stroke();
 
             // Draw grid lines and score labels
@@ -243,46 +275,88 @@ module.exports = {
             ctx.lineWidth = 1;
             ctx.fillStyle = 'black';
             ctx.font = '12px Arial';
-            ctx.textAlign = 'right';
 
-            for (let score = 10; score >= -10; score -= 2) {
-                const y = padding + (10 - score) * (height - 2 * padding) / 20;
-                // Grid line
+            for (let score = MAX_SCORE; score >= 0; score -= 1) {
+                const y = padding + (MAX_SCORE - score) * (height - 2 * padding) / MAX_SCORE;
+
+                // Grid lines
                 ctx.beginPath();
                 ctx.moveTo(padding, y);
                 ctx.lineTo(width - padding, y);
                 ctx.stroke();
-                // Score label
-                ctx.fillText(score.toString(), padding - 5, y + 4);
+
+                // Score labels
+                ctx.textAlign = 'right';
+                ctx.fillText(score.toString(), centerX - 5, y + 4);
             }
 
-            // Draw horizontal line at zero with 30% opacity
-            const zeroY = padding + (10 - 0) * (height - 2 * padding) / 20;
-            ctx.beginPath();
-            ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-            ctx.moveTo(padding, zeroY);
-            ctx.lineTo(width - padding, zeroY);
-            ctx.stroke();
+            // Plot points for each personality with different colors
+            const colors = ['rgb(54, 162, 235)', 'rgb(255, 99, 132)', 'rgb(75, 192, 192)'];
+            const legendY = padding;
+            const legendX = width - padding - 100;
 
-            // Plot points
-            ctx.fillStyle = 'rgb(54, 162, 235)';
-            const x = padding + 100; // Fixed x position for all points
-            explanations.scored_biases.forEach((bias) => {
-                const y = padding + (10 - bias.score) * (height - 2 * padding) / 20;
+            // Draw legend
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillStyle = 'black';
+            ctx.fillText('Personalities:', legendX, legendY - 20);
 
-                // Draw point
+            allPersonalityExplanations.forEach((personalityData, pIndex) => {
+                const color = colors[pIndex % colors.length];
+
+                // Add to legend
+                ctx.fillStyle = color;
                 ctx.beginPath();
-                ctx.arc(x, y, 6, 0, 2 * Math.PI);
+                ctx.arc(legendX, legendY + (pIndex * 25), 6, 0, 2 * Math.PI);
                 ctx.fill();
+                ctx.fillText(personalityData.personality, legendX + 15, legendY + (pIndex * 25) + 4);
+
+                // Plot points
+                personalityData.scored_biases.forEach((bias, bIndex) => {
+                    const y = padding + (MAX_SCORE - bias.score) * (height - 2 * padding) / MAX_SCORE;
+                    const baseY = padding + (MAX_SCORE - bias.for_score) * (height - 2 * padding) / MAX_SCORE;
+
+                    // Calculate halfway points between center and edges
+                    const distanceFromCenter = (centerX - padding) / 2;  // Half the distance from center to edge
+
+                    // Against score (left side)
+                    const leftX = centerX - distanceFromCenter - (pIndex * 20);
+                    const leftY = padding + (MAX_SCORE - bias.against_score) * (height - 2 * padding) / MAX_SCORE;
+
+                    // For score (right side)
+                    const rightX = centerX + distanceFromCenter + (pIndex * 20);
+                    const rightY = padding + (MAX_SCORE - bias.for_score) * (height - 2 * padding) / MAX_SCORE;
+
+                    // Draw connecting line
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(leftX, leftY);
+                    ctx.lineTo(rightX, rightY);
+                    ctx.stroke();
+
+                    // Draw points
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(leftX, leftY, 6, 0, 2 * Math.PI);
+                    ctx.fill();
+
+                    ctx.beginPath();
+                    ctx.arc(rightX, rightY, 6, 0, 2 * Math.PI);
+                    ctx.fill();
+                });
             });
+
+            // Add labels
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = 'black';
+            ctx.fillText('Against Bias', centerX - 150, padding - 20);
+            ctx.fillText('For Bias', centerX + 150, padding - 20);
 
             // Convert canvas to buffer
             const buffer = canvas.toBuffer('image/png');
-            this.logInfo("Canvas converted to PNG buffer successfully");
-
-            // Save image using spaceModule
             const imageId = await spaceModule.putImage(buffer);
-            this.logInfo("Image saved successfully with ID:", imageId);
 
             // Create and save the document
             this.logProgress("Creating document object...");
@@ -290,12 +364,12 @@ module.exports = {
                 title: `bias_explained_${new Date().toISOString()}`,
                 type: 'bias_explained',
                 content: JSON.stringify({
-                    explanations
+                    allPersonalityExplanations
                 }, null, 2),
                 abstract: JSON.stringify({
                     type: "bias_explained",
                     sourceDocumentId: this.parameters.sourceDocumentId,
-                    personality: personalityObj.name,
+                    personalities: personalities.map(p => p.name),
                     timestamp: new Date().toISOString()
                 }, null, 2),
                 metadata: {
@@ -305,17 +379,14 @@ module.exports = {
             };
 
             const documentId = await documentModule.addDocument(this.spaceId, documentObj);
-            this.logInfo("Document created successfully with ID:", documentId);
 
-            // Add visualization chapter first
+            // Add visualization chapter
             const visualChapter = {
                 title: "Bias Score Distribution",
-                idea: "Visual representation of bias scores"
+                idea: "Visual representation of bias scores across personalities"
             };
             const visualChapterId = await documentModule.addChapter(this.spaceId, documentId, visualChapter);
-            this.logInfo("Visualization chapter added with ID:", visualChapterId);
 
-            // Add visualization paragraph with image
             await documentModule.addParagraph(this.spaceId, documentId, visualChapterId, {
                 text: "",
                 commands: {
@@ -324,27 +395,24 @@ module.exports = {
                     }
                 }
             });
-            this.logInfo("Visualization paragraph added successfully");
 
-            // Add chapters for each bias with scores in titles
-            for (const bias of explanations.scored_biases) {
-                const chapterData = {
-                    title: `${bias.bias_type} (Score: ${bias.score})`,
-                    idea: `Analysis of ${bias.bias_type}`
-                };
+            // Add chapters for each bias and personality
+            for (const personalityExplanation of allPersonalityExplanations) {
+                for (const bias of personalityExplanation.scored_biases) {
+                    const chapterData = {
+                        title: `${bias.bias_type} - ${personalityExplanation.personality} (For: ${bias.for_score}, Against: ${bias.against_score})`,
+                        idea: `Analysis of ${bias.bias_type} by ${personalityExplanation.personality}`
+                    };
 
-                const chapterId = await documentModule.addChapter(this.spaceId, documentId, chapterData);
-                this.logInfo(`Added chapter for bias: ${bias.bias_type}`);
-
-                await documentModule.addParagraph(this.spaceId, documentId, chapterId, {
-                    text: bias.detailed_explanation,
-                    commands: {}
-                });
+                    const chapterId = await documentModule.addChapter(this.spaceId, documentId, chapterData);
+                    await documentModule.addParagraph(this.spaceId, documentId, chapterId, {
+                        text: bias.detailed_explanation,
+                        commands: {}
+                    });
+                }
             }
 
             this.logProgress("Task completed successfully!");
-            this.logInfo("Document saved and accessible at ID:", documentId);
-
             return {
                 status: 'completed',
                 documentId: documentId
