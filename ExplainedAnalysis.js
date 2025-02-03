@@ -248,7 +248,7 @@ module.exports = {
             // Create visualization data
             this.logProgress("Creating visualization data...");
 
-            const width = 5400;
+            const width = 6750; // Increased from 6750 (25%)
             const height = 2400; // Increased from 2000 to accommodate legend
             const padding = 450;
             const diagramHeight = 1800; // Height reserved for the diagram
@@ -428,14 +428,15 @@ module.exports = {
             strengthCtx.fillStyle = 'white';
             strengthCtx.fillRect(0, 0, width, height);
 
-            // Calculate the right shift (25% of available space after padding)
-            const rightShift = (width - (padding * 2)) * 0.25; // Increased from 0.2 to 0.25
+            // Calculate the center line position
+            const centerLineX = width/2;
+            const scaleUnit = (width/2 - padding) / MAX_SCORE; // Reset to normal scale
 
             // Draw title for strength comparison
-            strengthCtx.font = 'bold 108px Arial';
+            strengthCtx.font = 'bold 81px Arial';
             strengthCtx.textAlign = 'center';
             strengthCtx.fillStyle = 'black';
-            strengthCtx.fillText('Bias Strength Comparison', width/2, 160); // Removed rightShift to center title
+            strengthCtx.fillText('Bias Strength Comparison', width/2, 160);
 
             // Calculate bias strengths for each personality
             const biasStrengths = allPersonalityExplanations.map(personality => ({
@@ -449,40 +450,76 @@ module.exports = {
             }));
 
             const barHeight = 60;
-            const maxBarWidth = width - (padding * 3); // Reduced width to accommodate scores
-            const startY = 300; // Moved up since legend will be at bottom
-            const startX = padding + rightShift;
+            const maxBarWidth = width - (padding * 2);
+            const startY = 300;
+            const startX = padding;
 
             // Draw strength bars for each bias type with more vertical spacing
             biasTypes.forEach((biasType, typeIndex) => {
                 const y = startY + (typeIndex * (barHeight + 120));
 
+                // Draw background rectangle for this bias group
+                strengthCtx.fillStyle = typeIndex % 2 === 0 ? '#f8f8f8' : '#f0f0f0';
+                strengthCtx.fillRect(centerLineX - (maxBarWidth/2), y - 20, maxBarWidth * 1.5, barHeight + 80);
+
+                // Draw connecting dotted line from title to bars
+                strengthCtx.beginPath();
+                strengthCtx.setLineDash([5, 5]);
+                strengthCtx.moveTo(centerLineX - (maxBarWidth/2) + 1280, y + barHeight/2 + 10); // slightly left of text
+                strengthCtx.lineTo(centerLineX - (maxBarWidth/2) + 1400, y + barHeight/2 + 10); // to the bars
+                strengthCtx.strokeStyle = '#888888';
+                strengthCtx.lineWidth = 2;
+                strengthCtx.stroke();
+                strengthCtx.setLineDash([]); // Reset to solid line
+
                 // Draw bias type label
                 strengthCtx.font = 'bold 72px Arial';
                 strengthCtx.textAlign = 'right';
                 strengthCtx.fillStyle = 'black';
-                strengthCtx.fillText(biasType, startX - 90, y + barHeight/2 + 18);
+                strengthCtx.fillText(biasType, centerLineX - (maxBarWidth/2) + 1400, y + (barHeight + 40)/2);
 
                 // Draw bars for each personality with more vertical spacing
                 biasStrengths.forEach((personality, pIndex) => {
                     const bias = personality.biases.find(b => b.type === biasType);
                     if (bias) {
-                        const barWidth = (bias.strength / MAX_SCORE) * maxBarWidth;
-                        const x = startX;
                         const yOffset = pIndex * (barHeight + 20);
 
-                        strengthCtx.fillStyle = colors[pIndex];
-                        strengthCtx.fillRect(x, y + yOffset, barWidth, barHeight/2);
+                        // Calculate bar dimensions for against and for scores - make them 25% shorter again
+                        const againstWidth = bias.against_score * scaleUnit * 0.5;
+                        const forWidth = bias.for_score * scaleUnit * 0.5;
 
-                        // Add values with adjusted positioning
+                        strengthCtx.fillStyle = colors[pIndex];
+                        // Draw against score bar (left side)
+                        strengthCtx.fillRect(centerLineX - againstWidth, y + yOffset, againstWidth, barHeight/2);
+                        // Draw for score bar (right side)
+                        strengthCtx.fillRect(centerLineX, y + yOffset, forWidth, barHeight/2);
+
+                        // Add scores on both sides
                         strengthCtx.fillStyle = 'black';
-                        strengthCtx.textAlign = 'left';
+
+                        // Against score on left side
+                        strengthCtx.textAlign = 'right';
                         strengthCtx.font = 'bold 60px Arial';
-                        strengthCtx.fillText(`${bias.strength} (${bias.against_score}, ${bias.for_score})`,
-                            x + barWidth + 45, y + yOffset + (barHeight/3));
+                        strengthCtx.fillText(`${bias.against_score}`,
+                            centerLineX - againstWidth - 10, // 10px left of bar
+                            y + yOffset + (barHeight/3));
+
+                        // For score on right side
+                        strengthCtx.textAlign = 'left';
+                        strengthCtx.fillText(`${bias.for_score}`,
+                            centerLineX + forWidth + 10, // 10px right of bar
+                            y + yOffset + (barHeight/3));
                     }
                 });
             });
+
+            // Draw vertical center line
+            strengthCtx.beginPath();
+            strengthCtx.strokeStyle = '#000000'; // Solid black
+            strengthCtx.lineWidth = 8; // Increased from 4px (100%)
+            strengthCtx.moveTo(centerLineX, startY - 50);  // Start above first bar
+            strengthCtx.lineTo(centerLineX, startY + (biasTypes.length - 1) * (barHeight + 120) + barHeight + 100);  // Added 100 more pixels at bottom
+            strengthCtx.stroke();
 
             // Add legend at the bottom with clear separation
             const legendStartY = diagramHeight + padding; // Position legend below the diagram
