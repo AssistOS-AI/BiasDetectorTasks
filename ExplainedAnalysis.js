@@ -245,6 +245,11 @@ module.exports = {
                 allPersonalityExplanations.push(explanations);
             }
 
+            // =============================================
+            // FIRST DIAGRAM: Bias Analysis Distribution
+            // Circular visualization with bias types and scores
+            // =============================================
+
             // Create visualization data
             this.logProgress("Creating visualization data...");
 
@@ -419,6 +424,11 @@ module.exports = {
             // Add axis description
             ctx.font = 'bold 50px Arial'; // Increased from 40px
             ctx.fillText('(Higher score = Stronger opinion)', width/2, height - padding/2);
+
+            // =============================================
+            // SECOND DIAGRAM: Bias Strength Comparison
+            // Bar chart showing bias strength comparison
+            // =============================================
 
             // Create a second canvas for bias strength comparison
             const strengthCanvas = createCanvas(width, height);
