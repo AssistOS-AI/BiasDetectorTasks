@@ -459,14 +459,14 @@ module.exports = {
                 const y = startY + (typeIndex * (barHeight + 120));
 
                 // Draw background rectangle for this bias group
-                strengthCtx.fillStyle = typeIndex % 2 === 0 ? '#f8f8f8' : '#f0f0f0';
+                strengthCtx.fillStyle = typeIndex % 2 === 0 ? '#f0f0f0' : '#d8d8d8';
                 strengthCtx.fillRect(centerLineX - (maxBarWidth/2), y - 20, maxBarWidth * 1.5, barHeight + 80);
 
                 // Draw connecting dotted line from title to bars
                 strengthCtx.beginPath();
                 strengthCtx.setLineDash([5, 5]);
-                strengthCtx.moveTo(centerLineX - (maxBarWidth/2) + 1280, y + barHeight/2 + 10); // slightly left of text
-                strengthCtx.lineTo(centerLineX - (maxBarWidth/2) + 1400, y + barHeight/2 + 10); // to the bars
+                strengthCtx.moveTo(centerLineX - (maxBarWidth/2) + 1380, y + barHeight/2 + 10); // slightly left of text
+                strengthCtx.lineTo(centerLineX - (maxBarWidth/2) + 1500, y + barHeight/2 + 10); // to the bars
                 strengthCtx.strokeStyle = '#888888';
                 strengthCtx.lineWidth = 2;
                 strengthCtx.stroke();
@@ -476,7 +476,7 @@ module.exports = {
                 strengthCtx.font = 'bold 72px Arial';
                 strengthCtx.textAlign = 'right';
                 strengthCtx.fillStyle = 'black';
-                strengthCtx.fillText(biasType, centerLineX - (maxBarWidth/2) + 1400, y + (barHeight + 40)/2);
+                strengthCtx.fillText(biasType, centerLineX - (maxBarWidth/2) + 1400, y + barHeight + 20);
 
                 // Draw bars for each personality with more vertical spacing
                 biasStrengths.forEach((personality, pIndex) => {
