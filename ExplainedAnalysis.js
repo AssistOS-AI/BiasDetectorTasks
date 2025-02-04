@@ -573,11 +573,11 @@ module.exports = {
                 strengthCtx.stroke();
                 strengthCtx.setLineDash([]); // Reset to solid line
 
-                // Draw bias type label
+                // Draw bias type label -> Legend text
                 strengthCtx.font = 'bold 72px Arial';
                 strengthCtx.textAlign = 'right';
                 strengthCtx.fillStyle = 'black';
-                strengthCtx.fillText(biasType, centerLineX - (maxBarWidth/2) + 1400, y + barHeight + 20);
+                strengthCtx.fillText(biasType, centerLineX - (maxBarWidth/2) + 1200, y + barHeight + 20);
 
                 // Draw bars for each personality
                 biasStrengths.forEach((personality, pIndex) => {
