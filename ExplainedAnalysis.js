@@ -330,12 +330,12 @@ module.exports = {
 
                             // Draw points first
                             ctx.fillStyle = colors[pIndex];
-                            drawShape(ctx, shape, againstX, againstY, 30, bias.against_score);
-                            drawShape(ctx, shape, forX, forY, 30, bias.for_score);
+                            drawShape(ctx, shape, againstX, againstY, 70, bias.against_score);
+                            drawShape(ctx, shape, forX, forY, 70, bias.for_score);
 
                             // Then draw connecting line between the points
                             ctx.strokeStyle = colors[pIndex];
-                            ctx.lineWidth = 2;
+                            ctx.lineWidth = 7;
                             ctx.globalAlpha = 0.5;
                             ctx.beginPath();
                             ctx.moveTo(againstX, againstY);
@@ -507,9 +507,9 @@ module.exports = {
                 }
 
                 // Draw score inside shape
-                if (score !== '') {
+                if (score !== undefined && score !== null && score !== '') {
                     ctx.fillStyle = 'white';
-                    ctx.font = 'bold 24px Arial';
+                    ctx.font = 'bold 48px Arial';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillText(score.toString(), x, y);
