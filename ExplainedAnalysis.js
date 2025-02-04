@@ -269,16 +269,17 @@ module.exports = {
             ctx.fillRect(0, 0, width, height);
 
             // Draw title
-            ctx.font = 'bold 120px Arial';
-            ctx.textAlign = 'center';
             ctx.fillStyle = 'black';
-            ctx.fillText('Bias Analysis Distribution', width/2, padding/2);
+            ctx.font = 'bold 120px Arial';
+            ctx.textAlign = 'left';  
+            const titleX = width * 0.15;  
+            ctx.fillText('Bias Analysis Distribution', titleX, padding/2);
 
             // Create circular visualization
             const circularCenterX = width / 2;
             const baseHeight = height / 2; // Use this for radius calculation
-            const circularCenterY = baseHeight + 150; // Use this for position
-            const radius = (Math.min(circularCenterX, baseHeight) - padding) * 1.3;
+            const circularCenterY = baseHeight; // Use this for position
+            const radius = (Math.min(circularCenterX, baseHeight) - padding) * 1.56; // Increased from 1.3 to 1.56 (20% larger)
 
             // Draw concentric circles
             for (let i = 1; i <= 10; i++) {
@@ -362,7 +363,7 @@ module.exports = {
                 // Draw shape example
                 ctx.fillStyle = colors[index];
                 ctx.strokeStyle = colors[index];
-                drawShape(ctx, shape, legendStartX + 40, y - 10, 25, '');
+                drawShape(ctx, shape, legendStartX + 50, y, 50, '');
 
                 // Draw personality name
                 ctx.fillStyle = 'black';
