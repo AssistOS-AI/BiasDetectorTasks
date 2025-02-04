@@ -7,6 +7,9 @@ module.exports = {
             const MIN_WORDS = 50;
             const MAX_WORDS = 100;
 
+            // Define colors for personalities
+            const colors = ['rgb(54, 162, 235)', 'rgb(255, 99, 132)', 'rgb(75, 192, 192)'];
+
             this.logInfo("Initializing bias explanation task...");
             const llmModule = await this.loadModule("llm");
             const personalityModule = await this.loadModule("personality");
@@ -253,177 +256,265 @@ module.exports = {
             // Create visualization data
             this.logProgress("Creating visualization data...");
 
-            const width = 6750; // Increased from 6750 (25%)
-            const height = 2400; // Increased from 2000 to accommodate legend
+            const width = 6750;
+            const height = 2400;
             const padding = 450;
-            const diagramHeight = 1800; // Height reserved for the diagram
             const centerX = width / 2;
 
             // Load canvas using require
             const { createCanvas } = require('canvas');
             const canvas = createCanvas(width, height);
             const ctx = canvas.getContext('2d');
-
-            // Set white background
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, width, height);
 
-            // Draw central vertical axis
-            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-            ctx.lineWidth = 4; // 50% of 8
-            ctx.beginPath();
-            ctx.moveTo(centerX, padding);
-            ctx.lineTo(centerX, height - padding);
-            ctx.stroke();
-
-            // Draw grid lines and score labels
-            ctx.strokeStyle = 'rgba(0,0,0,0.1)';
-            ctx.lineWidth = 4;
-            ctx.fillStyle = 'black';
-            ctx.font = '40px Arial'; // 50% of 80px
-
             // Draw title
-            ctx.font = 'bold 120px Arial'; // Increased from 96px
+            ctx.font = 'bold 120px Arial';
             ctx.textAlign = 'center';
+            ctx.fillStyle = 'black';
             ctx.fillText('Bias Analysis Distribution', width/2, padding/2);
 
-            // Draw grid lines and labels
-            ctx.font = '40px Arial';
-            for (let score = MAX_SCORE; score >= 0; score -= 1) {
-                const y = padding + (MAX_SCORE - score) * (height - 2 * padding) / MAX_SCORE;
+            // Create circular visualization
+            const circularCenterX = width / 2;
+            const baseHeight = height / 2; // Use this for radius calculation
+            const circularCenterY = baseHeight + 150; // Use this for position
+            const radius = (Math.min(circularCenterX, baseHeight) - padding) * 1.3;
 
-                // Grid lines
+            // Draw concentric circles
+            for (let i = 1; i <= 10; i++) {
                 ctx.beginPath();
-                ctx.moveTo(padding, y);
-                ctx.lineTo(width - padding, y);
+                ctx.arc(circularCenterX, circularCenterY, (i / 10) * radius, 0, Math.PI * 2);
+                ctx.strokeStyle = i === 10 ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.1)';
+                ctx.lineWidth = i === 10 ? 2 : 1;
                 ctx.stroke();
-
-                // Score labels on both sides
-                ctx.textAlign = 'right';
-                ctx.fillText(score.toString(), centerX - 30, y + 16);
-                ctx.textAlign = 'left';
-                ctx.fillText(score.toString(), centerX + 30, y + 16);
             }
 
-            // Plot points for each personality with different colors
-            const colors = ['rgb(54, 162, 235)', 'rgb(255, 99, 132)', 'rgb(75, 192, 192)'];
-            const legendY = padding;
-            const legendX = width - padding - 400; // 50% of 800
+            // Draw center point
+            ctx.beginPath();
+            ctx.arc(circularCenterX, circularCenterY, 5, 0, Math.PI * 2);
+            ctx.fillStyle = 'black';
+            ctx.fill();
 
-            // Draw legend with more details
-            ctx.font = 'bold 64px Arial'; // 50% of 128px
+            // Calculate angles for bias lines
+            const biasTypes = [...new Set(allPersonalityExplanations[0].scored_biases.map(b => b.bias_type))];
+            const angleStep = Math.PI / biasTypes.length; // Divide by number of biases
+
+            // Draw bias lines and points
+            biasTypes.forEach((biasType, index) => {
+                const angle = index * angleStep * 2; // Multiply by 2 to space evenly
+                const color = `hsl(${(360 / biasTypes.length) * index}, 70%, 50%)`;
+
+                // Find all bias scores for this bias type
+                const biasScores = allPersonalityExplanations.flatMap(p => {
+                    const bias = p.scored_biases.find(b => b.bias_type === biasType);
+                    return bias ? [bias.against_score, bias.for_score] : [];
+                });
+
+                if (biasScores.length > 0) {
+                    // Draw points and connecting lines for each personality
+                    allPersonalityExplanations.forEach((personality, pIndex) => {
+                        const bias = personality.scored_biases.find(b => b.bias_type === biasType);
+                        if (bias) {
+                            const shapes = ['circle', 'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'star', 'cross', 'heart', 'octagon'];
+                            const shape = shapes[pIndex % shapes.length];
+
+                            // Calculate against score point
+                            const againstDist = (bias.against_score / 10) * radius;
+                            const againstX = circularCenterX + againstDist * Math.cos(angle);
+                            const againstY = circularCenterY + againstDist * Math.sin(angle);
+
+                            // Calculate for score point on opposite side
+                            const forDist = (bias.for_score / 10) * radius;
+                            const forX = circularCenterX + forDist * Math.cos(angle + Math.PI);
+                            const forY = circularCenterY + forDist * Math.sin(angle + Math.PI);
+
+                            // Draw points first
+                            ctx.fillStyle = colors[pIndex];
+                            drawShape(ctx, shape, againstX, againstY, 30, bias.against_score);
+                            drawShape(ctx, shape, forX, forY, 30, bias.for_score);
+
+                            // Then draw connecting line between the points
+                            ctx.strokeStyle = colors[pIndex];
+                            ctx.lineWidth = 2;
+                            ctx.globalAlpha = 0.5;
+                            ctx.beginPath();
+                            ctx.moveTo(againstX, againstY);
+                            ctx.lineTo(forX, forY);
+                            ctx.stroke();
+                            ctx.globalAlpha = 1;
+                        }
+                    });
+                }
+            });
+
+            // Draw legends on the right side
+            const legendStartX = width - padding * 4; // Moved further right
+            const legendStartY = padding * 2;
+            const legendSpacing = 100;
+
+            // Draw personality legend
+            ctx.font = 'bold 60px Arial';
             ctx.textAlign = 'left';
             ctx.fillStyle = 'black';
-            ctx.fillText('Personalities:', legendX, legendY - 80);
+            ctx.fillText('Personalities:', legendStartX, legendStartY - legendSpacing);
 
-            // Calculate bias types for y-axis labels
-            const biasTypes = [...new Set(allPersonalityExplanations[0].scored_biases.map(b => b.bias_type))];
-            const biasSpacing = (height - 2 * padding) / (biasTypes.length - 1);
+            // Draw personality shapes and names
+            ctx.font = 'bold 48px Arial';
+            allPersonalityExplanations.forEach((personality, index) => {
+                const y = legendStartY + index * legendSpacing;
+                const shapes = ['circle', 'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'star', 'cross', 'heart', 'octagon'];
+                const shape = shapes[index % shapes.length];
 
-            // Draw bias type labels on y-axis with colored scores
-            ctx.font = 'bold 60px Arial';
-            ctx.textAlign = 'right';
-            biasTypes.forEach((biasType, index) => {
-                const y = padding + index * biasSpacing;
-                // Set bias type color to black consistently
+                // Draw shape example
+                ctx.fillStyle = colors[index];
+                ctx.strokeStyle = colors[index];
+                drawShape(ctx, shape, legendStartX + 40, y - 10, 25, '');
+
+                // Draw personality name
                 ctx.fillStyle = 'black';
-                // Move bias types another 100% closer to diagram
-                ctx.fillText(biasType, padding + 1000, y + 16);
-
-                // Add scores for each personality with equal spacing
-                allPersonalityExplanations.forEach((personalityData, pIndex) => {
-                    const bias = personalityData.scored_biases.find(b => b.bias_type === biasType);
-                    if (bias) {
-                        ctx.fillStyle = colors[pIndex];
-                        // Calculate spacing to match the distance between text and first score
-                        const baseScorePosition = padding + 1150;
-                        const scoreSpacing = 150;
-                        ctx.fillText(`(${bias.against_score}, ${bias.for_score})`, baseScorePosition + (pIndex * scoreSpacing), y + 16);
-                    }
-                });
+                ctx.fillText(personality.personality, legendStartX + 100, y);
             });
 
-            allPersonalityExplanations.forEach((personalityData, pIndex) => {
-                const color = colors[pIndex % colors.length];
-
-                // Restore personality legend
-                ctx.fillStyle = color;
-                ctx.beginPath();
-                ctx.arc(legendX, legendY + (pIndex * 100), 20, 0, 2 * Math.PI);
-                ctx.fill();
-                ctx.fillStyle = color;
-                ctx.font = 'bold 48px Arial';
-                ctx.textAlign = 'left';
-                ctx.fillText(personalityData.personality, legendX + 50, legendY + (pIndex * 100) + 16);
-
-                // Plot points with labels
-                personalityData.scored_biases.forEach((bias, bIndex) => {
-                    const biasY = padding + bIndex * biasSpacing;
-
-                    // Calculate positions using both score values for x and y
-                    const distanceFromCenter = (centerX - padding) / 6;
-
-                    // Add larger offset based on personality index to prevent overlap
-                    const pointOffset = pIndex * 60;
-
-                    // Left point (Against)
-                    const leftX = centerX - distanceFromCenter - (bias.against_score * 15) + pointOffset;
-                    const leftY = padding + (MAX_SCORE - bias.against_score) * (height - 2 * padding) / MAX_SCORE;
-
-                    // Right point (For)
-                    const rightX = centerX + distanceFromCenter + (bias.for_score * 15) + pointOffset;
-                    const rightY = padding + (MAX_SCORE - bias.for_score) * (height - 2 * padding) / MAX_SCORE;
-
-                    // Draw connecting lines
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 4;
-                    ctx.globalAlpha = 0.3;
-                    ctx.beginPath();
-                    ctx.moveTo(leftX, leftY);
-                    ctx.lineTo(rightX, rightY);
-                    ctx.stroke();
-                    ctx.globalAlpha = 1.0;
-
-                    // Draw points 20% bigger than current size
-                    ctx.fillStyle = color;
-                    const pointSize = 36; // Increased from 30 (20% bigger)
-
-                    // Against score point
-                    ctx.beginPath();
-                    ctx.arc(leftX, leftY, pointSize, 0, 2 * Math.PI);
-                    ctx.fill();
-
-                    // Add score label inside point with white text (20% bigger)
-                    ctx.fillStyle = 'white';
-                    ctx.font = 'bold 48px Arial'; // Increased from 40px (20% bigger)
-                    ctx.textAlign = 'center';
-                    ctx.fillText(`${bias.against_score}`, leftX, leftY + 16);
-
-                    // For score point
-                    ctx.fillStyle = color;
-                    ctx.beginPath();
-                    ctx.arc(rightX, rightY, pointSize, 0, 2 * Math.PI);
-                    ctx.fill();
-
-                    // Add score label inside point with white text
-                    ctx.fillStyle = 'white';
-                    ctx.textAlign = 'center';
-                    ctx.fillText(`${bias.for_score}`, rightX, rightY + 16);
-                });
-            });
-
-            // Add axis labels closer to center
-            ctx.font = 'bold 80px Arial'; // Increased from 64px
-            ctx.textAlign = 'center';
+            // Draw bias type legend
+            const biasLegendStartY = legendStartY + (allPersonalityExplanations.length + 2) * legendSpacing;
+            ctx.font = 'bold 60px Arial';
             ctx.fillStyle = 'black';
-            // Move labels closer to where points start
-            const labelDistance = (centerX - padding) / 6 + 100; // Matches where the 1-point line starts
-            ctx.fillText('Against Bias', centerX - labelDistance, padding - 60);
-            ctx.fillText('For Bias', centerX + labelDistance, padding - 60);
+            ctx.fillText('Bias Types:', legendStartX, biasLegendStartY - legendSpacing);
 
-            // Add axis description
-            ctx.font = 'bold 50px Arial'; // Increased from 40px
-            ctx.fillText('(Higher score = Stronger opinion)', width/2, height - padding/2);
+            // Draw bias types and colors
+            ctx.font = 'bold 48px Arial';
+            biasTypes.forEach((biasType, index) => {
+                const y = biasLegendStartY + index * legendSpacing;
+                const color = `hsl(${(360 / biasTypes.length) * index}, 70%, 50%)`;
+
+                // Draw color line
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.moveTo(legendStartX, y - 10);
+                ctx.lineTo(legendStartX + 80, y - 10);
+                ctx.stroke();
+
+                // Draw bias type name with scores
+                ctx.fillStyle = 'black';
+                const scores = allPersonalityExplanations.map(personality => {
+                    const bias = personality.scored_biases.find(b => b.bias_type === biasType);
+                    if (bias) {
+                        return `${bias.against_score}, ${bias.for_score}`;
+                    }
+                    return '';
+                }).filter(Boolean);
+                ctx.fillText(`${biasType} (${scores.join('; ')})`, legendStartX + 100, y);
+            });
+
+            // Helper function to draw different shapes
+            function drawShape(ctx, shape, x, y, size, score) {
+                switch(shape) {
+                    case 'circle':
+                        ctx.beginPath();
+                        ctx.arc(x, y, size/2, 0, Math.PI * 2);
+                        ctx.fill();
+                        break;
+                    case 'triangle':
+                        ctx.beginPath();
+                        const height = size * Math.sqrt(3) / 2;
+                        ctx.moveTo(x, y - height/2);
+                        ctx.lineTo(x - size/2, y + height/2);
+                        ctx.lineTo(x + size/2, y + height/2);
+                        ctx.closePath();
+                        ctx.fill();
+                        break;
+                    case 'square':
+                        ctx.beginPath();
+                        ctx.rect(x - size/2, y - size/2, size, size);
+                        ctx.fill();
+                        break;
+                    case 'diamond':
+                        ctx.beginPath();
+                        ctx.moveTo(x, y - size/2);
+                        ctx.lineTo(x + size/2, y);
+                        ctx.lineTo(x, y + size/2);
+                        ctx.lineTo(x - size/2, y);
+                        ctx.closePath();
+                        ctx.fill();
+                        break;
+                    case 'pentagon':
+                        ctx.beginPath();
+                        for (let i = 0; i < 5; i++) {
+                            const angle = (i * 2 * Math.PI / 5) - Math.PI / 2;
+                            const px = x + size/2 * Math.cos(angle);
+                            const py = y + size/2 * Math.sin(angle);
+                            if (i === 0) ctx.moveTo(px, py);
+                            else ctx.lineTo(px, py);
+                        }
+                        ctx.closePath();
+                        ctx.fill();
+                        break;
+                    case 'hexagon':
+                        ctx.beginPath();
+                        for (let i = 0; i < 6; i++) {
+                            const angle = (i * 2 * Math.PI / 6);
+                            const px = x + size/2 * Math.cos(angle);
+                            const py = y + size/2 * Math.sin(angle);
+                            if (i === 0) ctx.moveTo(px, py);
+                            else ctx.lineTo(px, py);
+                        }
+                        ctx.closePath();
+                        ctx.fill();
+                        break;
+                    case 'star':
+                        ctx.beginPath();
+                        for (let i = 0; i < 10; i++) {
+                            const angle = (i * 2 * Math.PI / 10) - Math.PI / 2;
+                            const r = i % 2 === 0 ? size/2 : size/4;
+                            const px = x + r * Math.cos(angle);
+                            const py = y + r * Math.sin(angle);
+                            if (i === 0) ctx.moveTo(px, py);
+                            else ctx.lineTo(px, py);
+                        }
+                        ctx.closePath();
+                        ctx.fill();
+                        break;
+                    case 'cross':
+                        ctx.beginPath();
+                        ctx.moveTo(x - size/2, y);
+                        ctx.lineTo(x + size/2, y);
+                        ctx.moveTo(x, y - size/2);
+                        ctx.lineTo(x, y + size/2);
+                        ctx.lineWidth = size/4;
+                        ctx.stroke();
+                        break;
+                    case 'heart':
+                        ctx.beginPath();
+                        const topCurveHeight = size/3;
+                        ctx.moveTo(x, y + size/4);
+                        ctx.bezierCurveTo(x + size/2, y - size/2, x + size, y, x, y + size/2);
+                        ctx.bezierCurveTo(x - size, y, x - size/2, y - size/2, x, y + size/4);
+                        ctx.fill();
+                        break;
+                    case 'octagon':
+                        ctx.beginPath();
+                        for (let i = 0; i < 8; i++) {
+                            const angle = (i * 2 * Math.PI / 8);
+                            const px = x + size/2 * Math.cos(angle);
+                            const py = y + size/2 * Math.sin(angle);
+                            if (i === 0) ctx.moveTo(px, py);
+                            else ctx.lineTo(px, py);
+                        }
+                        ctx.closePath();
+                        ctx.fill();
+                        break;
+                }
+
+                // Draw score inside shape
+                if (score !== '') {
+                    ctx.fillStyle = 'white';
+                    ctx.font = 'bold 24px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(score.toString(), x, y);
+                }
+            }
 
             // =============================================
             // SECOND DIAGRAM: Bias Strength Comparison
@@ -440,7 +531,7 @@ module.exports = {
 
             // Calculate the center line position
             const centerLineX = width/2;
-            const scaleUnit = (width/2 - padding) / MAX_SCORE; // Reset to normal scale
+            const scaleUnit = (width/2 - padding) / MAX_SCORE;
 
             // Draw title for strength comparison
             strengthCtx.font = 'bold 81px Arial';
@@ -464,7 +555,7 @@ module.exports = {
             const startY = 300;
             const startX = padding;
 
-            // Draw strength bars for each bias type with more vertical spacing
+            // Draw strength bars for each bias type
             biasTypes.forEach((biasType, typeIndex) => {
                 const y = startY + (typeIndex * (barHeight + 120));
 
@@ -488,13 +579,13 @@ module.exports = {
                 strengthCtx.fillStyle = 'black';
                 strengthCtx.fillText(biasType, centerLineX - (maxBarWidth/2) + 1400, y + barHeight + 20);
 
-                // Draw bars for each personality with more vertical spacing
+                // Draw bars for each personality
                 biasStrengths.forEach((personality, pIndex) => {
                     const bias = personality.biases.find(b => b.type === biasType);
                     if (bias) {
                         const yOffset = pIndex * (barHeight + 20);
 
-                        // Calculate bar dimensions for against and for scores - make them 25% shorter again
+                        // Calculate bar dimensions for against and for scores
                         const againstWidth = bias.against_score * scaleUnit * 0.5;
                         const forWidth = bias.for_score * scaleUnit * 0.5;
 
@@ -532,29 +623,29 @@ module.exports = {
             strengthCtx.stroke();
 
             // Add legend at the bottom with clear separation
-            const legendStartY = diagramHeight + padding; // Position legend below the diagram
+            const strengthLegendStartY = height + padding; // Position legend below the diagram
             strengthCtx.font = 'bold 72px Arial';
             strengthCtx.textAlign = 'left';
             strengthCtx.fillStyle = 'black';
-            strengthCtx.fillText('Legend:', padding, legendStartY);
+            strengthCtx.fillText('Legend:', padding, strengthLegendStartY);
 
             // Add strength explanation to the right of "Legend:"
             strengthCtx.font = 'bold 60px Arial';
             const legendTextX = padding + 300;
-            strengthCtx.fillText('Values shown as: Strength (Against score, For score)', legendTextX, legendStartY);
-            strengthCtx.fillText('Strength = |For score - Against score|', legendTextX, legendStartY + 80);
+            strengthCtx.fillText('Values shown as: Strength (Against score, For score)', legendTextX, strengthLegendStartY);
+            strengthCtx.fillText('Strength = |For score - Against score|', legendTextX, strengthLegendStartY + 80);
 
             // Add personality colors next to the legend explanation
             biasStrengths.forEach((personality, index) => {
                 const xPos = legendTextX + 1800 + (index * 600); // Increased from 1200 to 1800 and spacing from 400 to 600
                 strengthCtx.fillStyle = colors[index];
                 strengthCtx.beginPath();
-                strengthCtx.arc(xPos, legendStartY - 20, 30, 0, 2 * Math.PI);
+                strengthCtx.arc(xPos, strengthLegendStartY - 20, 30, 0, 2 * Math.PI);
                 strengthCtx.fill();
                 strengthCtx.fillStyle = 'black';
                 strengthCtx.textAlign = 'left';
                 strengthCtx.font = 'bold 60px Arial';
-                strengthCtx.fillText(personality.name, xPos + 50, legendStartY);
+                strengthCtx.fillText(personality.name, xPos + 50, strengthLegendStartY);
             });
 
             // Convert both canvases to buffers and combine them
