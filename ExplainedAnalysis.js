@@ -249,8 +249,8 @@ module.exports = {
             }
 
             // =============================================
-            // FIRST DIAGRAM: Bias Analysis Distribution
-            // Circular visualization with bias types and scores
+            // SECOND DIAGRAM: Bias Strength Comparison
+            // Bar chart showing bias strength comparison
             // =============================================
 
             // Create visualization data
@@ -259,274 +259,13 @@ module.exports = {
             const width = 6750;
             const height = 2400;
             const padding = 450;
-            const centerX = width / 2;
-
-            // Load canvas using require
-            const { createCanvas } = require('canvas');
-            const canvas = createCanvas(width, height);
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = 'white';
-            ctx.fillRect(0, 0, width, height);
-
-            // Draw title
-            ctx.fillStyle = 'black';
-            ctx.font = 'bold 120px Arial';
-            ctx.textAlign = 'left';  
-            const titleX = width * 0.15;  
-            ctx.fillText('Bias Analysis Distribution', titleX, padding/2);
-
-            // Create circular visualization
-            const circularCenterX = width / 2;
-            const baseHeight = height / 2; // Use this for radius calculation
-            const circularCenterY = baseHeight; // Use this for position
-            const radius = (Math.min(circularCenterX, baseHeight) - padding) * 1.56; // Increased from 1.3 to 1.56 (20% larger)
-
-            // Draw concentric circles
-            for (let i = 1; i <= 10; i++) {
-                ctx.beginPath();
-                ctx.arc(circularCenterX, circularCenterY, (i / 10) * radius, 0, Math.PI * 2);
-                ctx.strokeStyle = i === 10 ? 'rgba(0, 0, 0, 0.5)' : 'rgba(0, 0, 0, 0.1)';
-                ctx.lineWidth = i === 10 ? 2 : 1;
-                ctx.stroke();
-            }
-
-            // Draw center point
-            ctx.beginPath();
-            ctx.arc(circularCenterX, circularCenterY, 5, 0, Math.PI * 2);
-            ctx.fillStyle = 'black';
-            ctx.fill();
 
             // Calculate angles for bias lines
             const biasTypes = [...new Set(allPersonalityExplanations[0].scored_biases.map(b => b.bias_type))];
-            const angleStep = (Math.PI / biasTypes.length) / 2; // Divide by number of biases and 2 for spacing
 
-            // Draw bias lines and points
-            biasTypes.forEach((biasType, index) => {
-                const baseAngle = index * angleStep * 4; // Multiply by 4 to maintain even spacing between bias types
-                const biasColor = `hsl(${(360 / biasTypes.length) * index}, 70%, 50%)`; // Color for this bias type
+            // Load canvas using require
+            const { createCanvas } = require('canvas');
 
-                allPersonalityExplanations.forEach((personality, pIndex) => {
-                    const bias = personality.scored_biases.find(b => b.bias_type === biasType);
-                    if (bias) {
-                        const shapes = ['circle', 'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'star', 'cross', 'heart', 'octagon'];
-                        const shape = shapes[pIndex % shapes.length];
-
-                        // Add personality offset to base angle
-                        const angle = baseAngle + (pIndex * angleStep);
-
-                        // Calculate against score point
-                        const againstDist = (bias.against_score / 10) * radius;
-                        const againstX = circularCenterX + againstDist * Math.cos(angle);
-                        const againstY = circularCenterY + againstDist * Math.sin(angle);
-
-                        // Calculate for score point on opposite side
-                        const forDist = (bias.for_score / 10) * radius;
-                        const forX = circularCenterX + forDist * Math.cos(angle + Math.PI);
-                        const forY = circularCenterY + forDist * Math.sin(angle + Math.PI);
-
-                        // Draw points first
-                        ctx.fillStyle = colors[pIndex];
-                        drawShape(ctx, shape, againstX, againstY, 80, bias.against_score);
-                        drawShape(ctx, shape, forX, forY, 80, bias.for_score);
-
-                        // Then draw connecting line between the points
-                        ctx.strokeStyle = biasColor;
-                        ctx.lineWidth = 5;
-                        ctx.globalAlpha = 0.5;
-                        ctx.beginPath();
-                        ctx.moveTo(againstX, againstY);
-                        ctx.lineTo(forX, forY);
-                        ctx.stroke();
-                        ctx.globalAlpha = 1;
-                    }
-                });
-            });
-
-            // Draw legends on the right side
-            const legendStartX = width - padding * 4;
-            const legendStartY = padding * 2;
-            const legendSpacing = 100;
-
-            // Draw personality legend
-            ctx.font = 'bold 60px Arial';
-            ctx.textAlign = 'left';
-            ctx.fillStyle = 'black';
-            ctx.fillText('Personalities:', legendStartX, legendStartY - legendSpacing);
-
-            // Draw personality shapes and names
-            ctx.font = 'bold 48px Arial';
-            allPersonalityExplanations.forEach((personality, index) => {
-                const y = legendStartY + index * legendSpacing;
-                const shapes = ['circle', 'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'star', 'cross', 'heart', 'octagon'];
-                const shape = shapes[index % shapes.length];
-
-                // Draw shape example
-                ctx.fillStyle = colors[index];
-                ctx.strokeStyle = colors[index];
-                drawShape(ctx, shape, legendStartX + 50, y, 50, '');
-
-                // Draw personality name
-                ctx.fillStyle = 'black';
-                ctx.fillText(personality.personality, legendStartX + 100, y);
-            });
-
-            // Draw bias type legend
-            const biasLegendStartY = legendStartY + (allPersonalityExplanations.length + 2) * legendSpacing;
-            ctx.font = 'bold 60px Arial';
-            ctx.fillStyle = 'black';
-            ctx.fillText('Bias Types:', legendStartX, biasLegendStartY - legendSpacing);
-
-            // Draw bias types and colors
-            ctx.font = 'bold 48px Arial';
-            biasTypes.forEach((biasType, index) => {
-                const y = biasLegendStartY + index * legendSpacing;
-                const color = `hsl(${(360 / biasTypes.length) * index}, 70%, 50%)`;
-
-                // Draw color line
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 4;
-                ctx.beginPath();
-                ctx.moveTo(legendStartX, y - 10);
-                ctx.lineTo(legendStartX + 80, y - 10);
-                ctx.stroke();
-
-                // Draw bias type name with scores
-                ctx.fillStyle = 'black';
-                const scores = allPersonalityExplanations.map(personality => {
-                    const bias = personality.scored_biases.find(b => b.bias_type === biasType);
-                    if (bias) {
-                        return `${bias.against_score}, ${bias.for_score}`;
-                    }
-                    return '';
-                }).filter(Boolean);
-                ctx.fillText(`${biasType} (${scores.join('; ')})`, legendStartX + 100, y);
-            });
-
-            // Helper function to draw different shapes
-            function drawShape(ctx, shape, x, y, size, score) {
-                const originalFillStyle = ctx.fillStyle; // Save the original fill color
-                
-                switch(shape) {
-                    case 'circle':
-                        ctx.beginPath();
-                        ctx.arc(x, y, size/2, 0, Math.PI * 2);
-                        ctx.fill();
-                        break;
-                    case 'triangle':
-                        ctx.beginPath();
-                        const height = size * Math.sqrt(3) / 2;
-                        ctx.moveTo(x, y - height/2);
-                        ctx.lineTo(x - size/2, y + height/2);
-                        ctx.lineTo(x + size/2, y + height/2);
-                        ctx.closePath();
-                        ctx.fill();
-                        break;
-                    case 'square':
-                        ctx.beginPath();
-                        ctx.rect(x - size/2, y - size/2, size, size);
-                        ctx.fill();
-                        break;
-                    case 'diamond':
-                        ctx.beginPath();
-                        ctx.moveTo(x, y - size/2);
-                        ctx.lineTo(x + size/2, y);
-                        ctx.lineTo(x, y + size/2);
-                        ctx.lineTo(x - size/2, y);
-                        ctx.closePath();
-                        ctx.fill();
-                        break;
-                    case 'pentagon':
-                        ctx.beginPath();
-                        for (let i = 0; i < 5; i++) {
-                            const angle = (i * 2 * Math.PI / 5) - Math.PI / 2;
-                            const px = x + size/2 * Math.cos(angle);
-                            const py = y + size/2 * Math.sin(angle);
-                            if (i === 0) ctx.moveTo(px, py);
-                            else ctx.lineTo(px, py);
-                        }
-                        ctx.closePath();
-                        ctx.fill();
-                        break;
-                    case 'hexagon':
-                        ctx.beginPath();
-                        for (let i = 0; i < 6; i++) {
-                            const angle = (i * 2 * Math.PI / 6);
-                            const px = x + size/2 * Math.cos(angle);
-                            const py = y + size/2 * Math.sin(angle);
-                            if (i === 0) ctx.moveTo(px, py);
-                            else ctx.lineTo(px, py);
-                        }
-                        ctx.closePath();
-                        ctx.fill();
-                        break;
-                    case 'star':
-                        ctx.beginPath();
-                        for (let i = 0; i < 10; i++) {
-                            const angle = (i * 2 * Math.PI / 10) - Math.PI / 2;
-                            const r = i % 2 === 0 ? size/2 : size/4;
-                            const px = x + r * Math.cos(angle);
-                            const py = y + r * Math.sin(angle);
-                            if (i === 0) ctx.moveTo(px, py);
-                            else ctx.lineTo(px, py);
-                        }
-                        ctx.closePath();
-                        ctx.fill();
-                        break;
-                    case 'cross':
-                        ctx.beginPath();
-                        ctx.moveTo(x - size/2, y);
-                        ctx.lineTo(x + size/2, y);
-                        ctx.moveTo(x, y - size/2);
-                        ctx.lineTo(x, y + size/2);
-                        ctx.lineWidth = size/4;
-                        ctx.stroke();
-                        break;
-                    case 'heart':
-                        ctx.beginPath();
-                        const topCurveHeight = size/3;
-                        ctx.moveTo(x, y + size/4);
-                        ctx.bezierCurveTo(x + size/2, y - size/2, x + size, y, x, y + size/2);
-                        ctx.bezierCurveTo(x - size, y, x - size/2, y - size/2, x, y + size/4);
-                        ctx.fill();
-                        break;
-                    case 'octagon':
-                        ctx.beginPath();
-                        for (let i = 0; i < 8; i++) {
-                            const angle = (i * 2 * Math.PI / 8);
-                            const px = x + size/2 * Math.cos(angle);
-                            const py = y + size/2 * Math.sin(angle);
-                            if (i === 0) ctx.moveTo(px, py);
-                            else ctx.lineTo(px, py);
-                        }
-                        ctx.closePath();
-                        ctx.fill();
-                        break;
-                }
-
-                // Draw score inside shape
-                if (score !== undefined && score !== null && score !== '') {
-                    // Draw black outline
-                    ctx.strokeStyle = 'black';
-                    ctx.lineWidth = 3;
-                    ctx.font = 'bold 48px Arial';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.strokeText(score.toString(), x, y);
-                    
-                    // Draw white text
-                    ctx.fillStyle = 'white';
-                    ctx.fillText(score.toString(), x, y);
-                }
-                
-                ctx.fillStyle = originalFillStyle; // Restore the original fill color
-            }
-
-            // =============================================
-            // SECOND DIAGRAM: Bias Strength Comparison
-            // Bar chart showing bias strength comparison
-            // =============================================
-
-            // Create a second canvas for bias strength comparison
             const strengthCanvas = createCanvas(width, height);
             const strengthCtx = strengthCanvas.getContext('2d');
 
@@ -642,13 +381,11 @@ module.exports = {
                 strengthCtx.fillText(personality.name, xPos + 50, strengthLegendStartY);
             });
 
-            // Convert both canvases to buffers and combine them
-            const buffer1 = canvas.toBuffer('image/png');
-            const buffer2 = strengthCanvas.toBuffer('image/png');
+            // Convert canvas to buffer
+            const buffer = strengthCanvas.toBuffer('image/png');
 
-            // Upload both images
-            const imageId1 = await spaceModule.putImage(buffer1);
-            const imageId2 = await spaceModule.putImage(buffer2);
+            // Upload image
+            const imageId = await spaceModule.putImage(buffer);
 
             // Create and save the document
             this.logProgress("Creating document object...");
@@ -680,19 +417,10 @@ module.exports = {
             const visualChapterId = await documentModule.addChapter(this.spaceId, documentId, visualChapter);
 
             await documentModule.addParagraph(this.spaceId, documentId, visualChapterId, {
-                text: "Distribution of bias scores across personalities:",
-                commands: {
-                    image: {
-                        id: imageId1
-                    }
-                }
-            });
-
-            await documentModule.addParagraph(this.spaceId, documentId, visualChapterId, {
                 text: "Comparison of total bias strength:",
                 commands: {
                     image: {
-                        id: imageId2
+                        id: imageId
                     }
                 }
             });
