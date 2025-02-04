@@ -537,7 +537,7 @@ module.exports = {
             strengthCtx.font = 'bold 81px Arial';
             strengthCtx.textAlign = 'center';
             strengthCtx.fillStyle = 'black';
-            strengthCtx.fillText('Bias Strength Comparison', width/2, 160);
+            strengthCtx.fillText('Bias Balance Comparison', width/2, 160);
 
             // Calculate bias strengths for each personality
             const biasStrengths = allPersonalityExplanations.map(personality => ({
@@ -563,17 +563,7 @@ module.exports = {
                 strengthCtx.fillStyle = typeIndex % 2 === 0 ? '#f0f0f0' : '#d8d8d8';
                 strengthCtx.fillRect(centerLineX - (maxBarWidth/2), y - 20, maxBarWidth * 1.5, barHeight + 80);
 
-                // Draw connecting dotted line from title to bars
-                strengthCtx.beginPath();
-                strengthCtx.setLineDash([5, 5]);
-                strengthCtx.moveTo(centerLineX - (maxBarWidth/2) + 1380, y + barHeight/2 + 10); // slightly left of text
-                strengthCtx.lineTo(centerLineX - (maxBarWidth/2) + 1500, y + barHeight/2 + 10); // to the bars
-                strengthCtx.strokeStyle = '#888888';
-                strengthCtx.lineWidth = 2;
-                strengthCtx.stroke();
-                strengthCtx.setLineDash([]); // Reset to solid line
-
-                // Draw bias type label -> Legend text
+                // Legend text
                 strengthCtx.font = 'bold 72px Arial';
                 strengthCtx.textAlign = 'right';
                 strengthCtx.fillStyle = 'black';
@@ -623,7 +613,7 @@ module.exports = {
             strengthCtx.stroke();
 
             // Add legend at the bottom with clear separation
-            const strengthLegendStartY = height + padding; // Position legend below the diagram
+            const strengthLegendStartY = height - padding + 50; // Position legend below the diagram
             strengthCtx.font = 'bold 72px Arial';
             strengthCtx.textAlign = 'left';
             strengthCtx.fillStyle = 'black';
@@ -632,8 +622,7 @@ module.exports = {
             // Add strength explanation to the right of "Legend:"
             strengthCtx.font = 'bold 60px Arial';
             const legendTextX = padding + 300;
-            strengthCtx.fillText('Values shown as: Strength (Against score, For score)', legendTextX, strengthLegendStartY);
-            strengthCtx.fillText('Strength = |For score - Against score|', legendTextX, strengthLegendStartY + 80);
+            strengthCtx.fillText('Values shown as: Balance (Against score, For score)', legendTextX, strengthLegendStartY);
 
             // Add personality colors next to the legend explanation
             biasStrengths.forEach((personality, index) => {
