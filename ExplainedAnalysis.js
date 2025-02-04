@@ -297,58 +297,52 @@ module.exports = {
 
             // Calculate angles for bias lines
             const biasTypes = [...new Set(allPersonalityExplanations[0].scored_biases.map(b => b.bias_type))];
-            const angleStep = Math.PI / biasTypes.length; // Divide by number of biases
+            const angleStep = (Math.PI / biasTypes.length) / 2; // Divide by number of biases and 2 for spacing
 
             // Draw bias lines and points
             biasTypes.forEach((biasType, index) => {
-                const angle = index * angleStep * 2; // Multiply by 2 to space evenly
-                const color = `hsl(${(360 / biasTypes.length) * index}, 70%, 50%)`;
+                const baseAngle = index * angleStep * 4; // Multiply by 4 to maintain even spacing between bias types
+                const biasColor = `hsl(${(360 / biasTypes.length) * index}, 70%, 50%)`; // Color for this bias type
 
-                // Find all bias scores for this bias type
-                const biasScores = allPersonalityExplanations.flatMap(p => {
-                    const bias = p.scored_biases.find(b => b.bias_type === biasType);
-                    return bias ? [bias.against_score, bias.for_score] : [];
+                allPersonalityExplanations.forEach((personality, pIndex) => {
+                    const bias = personality.scored_biases.find(b => b.bias_type === biasType);
+                    if (bias) {
+                        const shapes = ['circle', 'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'star', 'cross', 'heart', 'octagon'];
+                        const shape = shapes[pIndex % shapes.length];
+
+                        // Add personality offset to base angle
+                        const angle = baseAngle + (pIndex * angleStep);
+
+                        // Calculate against score point
+                        const againstDist = (bias.against_score / 10) * radius;
+                        const againstX = circularCenterX + againstDist * Math.cos(angle);
+                        const againstY = circularCenterY + againstDist * Math.sin(angle);
+
+                        // Calculate for score point on opposite side
+                        const forDist = (bias.for_score / 10) * radius;
+                        const forX = circularCenterX + forDist * Math.cos(angle + Math.PI);
+                        const forY = circularCenterY + forDist * Math.sin(angle + Math.PI);
+
+                        // Draw points first
+                        ctx.fillStyle = colors[pIndex];
+                        drawShape(ctx, shape, againstX, againstY, 80, bias.against_score);
+                        drawShape(ctx, shape, forX, forY, 80, bias.for_score);
+
+                        // Then draw connecting line between the points
+                        ctx.strokeStyle = biasColor;
+                        ctx.lineWidth = 5;
+                        ctx.globalAlpha = 0.5;
+                        ctx.beginPath();
+                        ctx.moveTo(againstX, againstY);
+                        ctx.lineTo(forX, forY);
+                        ctx.stroke();
+                        ctx.globalAlpha = 1;
+                    }
                 });
-
-                if (biasScores.length > 0) {
-                    // Draw points and connecting lines for each personality
-                    allPersonalityExplanations.forEach((personality, pIndex) => {
-                        const bias = personality.scored_biases.find(b => b.bias_type === biasType);
-                        if (bias) {
-                            const shapes = ['circle', 'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'star', 'cross', 'heart', 'octagon'];
-                            const shape = shapes[pIndex % shapes.length];
-
-                            // Calculate against score point
-                            const againstDist = (bias.against_score / 10) * radius;
-                            const againstX = circularCenterX + againstDist * Math.cos(angle);
-                            const againstY = circularCenterY + againstDist * Math.sin(angle);
-
-                            // Calculate for score point on opposite side
-                            const forDist = (bias.for_score / 10) * radius;
-                            const forX = circularCenterX + forDist * Math.cos(angle + Math.PI);
-                            const forY = circularCenterY + forDist * Math.sin(angle + Math.PI);
-
-                            // Draw points first
-                            ctx.fillStyle = colors[pIndex];
-                            drawShape(ctx, shape, againstX, againstY, 70, bias.against_score);
-                            drawShape(ctx, shape, forX, forY, 70, bias.for_score);
-
-                            // Then draw connecting line between the points
-                            ctx.strokeStyle = colors[pIndex];
-                            ctx.lineWidth = 7;
-                            ctx.globalAlpha = 0.5;
-                            ctx.beginPath();
-                            ctx.moveTo(againstX, againstY);
-                            ctx.lineTo(forX, forY);
-                            ctx.stroke();
-                            ctx.globalAlpha = 1;
-                        }
-                    });
-                }
             });
 
             // Draw legends on the right side
-            const legendStartX = width - padding * 4; // Moved further right
+            const legendStartX = width - padding * 4;
             const legendStartY = padding * 2;
             const legendSpacing = 100;
 
@@ -409,6 +403,8 @@ module.exports = {
 
             // Helper function to draw different shapes
             function drawShape(ctx, shape, x, y, size, score) {
+                const originalFillStyle = ctx.fillStyle; // Save the original fill color
+                
                 switch(shape) {
                     case 'circle':
                         ctx.beginPath();
@@ -508,12 +504,20 @@ module.exports = {
 
                 // Draw score inside shape
                 if (score !== undefined && score !== null && score !== '') {
-                    ctx.fillStyle = 'white';
+                    // Draw black outline
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 3;
                     ctx.font = 'bold 48px Arial';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
+                    ctx.strokeText(score.toString(), x, y);
+                    
+                    // Draw white text
+                    ctx.fillStyle = 'white';
                     ctx.fillText(score.toString(), x, y);
                 }
+                
+                ctx.fillStyle = originalFillStyle; // Restore the original fill color
             }
 
             // =============================================
