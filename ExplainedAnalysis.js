@@ -249,8 +249,8 @@ module.exports = {
             }
 
             // =============================================
-            // SECOND DIAGRAM: Bias Strength Comparison
-            // Bar chart showing bias strength comparison
+            // Balance DIAGRAM: Bias Balance Comparison
+            // Bar chart showing bias balance comparison
             // =============================================
 
             // Create visualization data
